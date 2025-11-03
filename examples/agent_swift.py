@@ -9,10 +9,31 @@ Cet agent démontre l'utilisation de PydanticAI pour:
 
 import asyncio
 import re
+from typing import Optional
 from pydantic import BaseModel, Field, field_validator
 from pydantic_ai import Agent, ModelSettings
 
 from app.models import finance_model
+
+# Imports relatifs pour les modules dans examples/
+try:
+    from .swift_models import SWIFTMT103Structured, MT103Field32A
+    from .swift_extractor import (
+        parse_swift_mt103_advanced,
+        SwiftMT103Parsed,
+        format_swift_mt103_from_parsed,
+    )
+except ImportError:
+    # Fallback pour exécution directe
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).parent))
+    from swift_models import SWIFTMT103Structured, MT103Field32A
+    from swift_extractor import (
+        parse_swift_mt103_advanced,
+        SwiftMT103Parsed,
+        format_swift_mt103_from_parsed,
+    )
 
 # Model settings for SWIFT generation (complex structured output)
 swift_model_settings = ModelSettings(
@@ -72,16 +93,22 @@ swift_generator = Agent(
 )
 
 
-# Agent pour parsing de messages SWIFT
+# Agent pour parsing de messages SWIFT avec extraction structurée
 swift_parser = Agent(
     finance_model,
-    model_settings=ModelSettings(max_output_tokens=1500),  # Sufficient for structured extraction
+    model_settings=ModelSettings(max_output_tokens=2000),
     system_prompt=(
-        "Vous êtes un expert en parsing de messages SWIFT. "
-        "Votre rôle est d'extraire les informations structurées "
-        "à partir de messages SWIFT formatés. "
-        "Identifiez tous les champs du message et extrayez les données correspondantes. "
-        "Répondez en français avec les données extraites de manière structurée."
+        "Vous êtes un expert en parsing de messages SWIFT bancaires. "
+        "Votre rôle est d'extraire précisément toutes les informations "
+        "à partir de messages SWIFT formatés (MT103, MT940, etc.).\n\n"
+        "Instructions importantes:\n"
+        "- Identifiez TOUS les champs SWIFT présents (même optionnels)\n"
+        "- Pour le champ :32A:, extrayez séparément la date (YYYYMMDD), devise (3 lettres), et montant\n"
+        "- Pour les champs :50K: et :59:, conservez toutes les lignes (nom, adresse, compte)\n"
+        "- Les dates doivent être au format YYYYMMDD\n"
+        "- Les montants doivent être numériques avec décimales\n"
+        "- Les BIC doivent être extraits des champs :52A:, :56A:, etc. si présents\n"
+        "- Répondez en JSON structuré pour faciliter le parsing"
     ),
 )
 
@@ -105,35 +132,208 @@ def format_swift_mt103(mt103: SWIFTMT103) -> str:
     return "\n".join(lines)
 
 
-def parse_swift_mt103(swift_text: str) -> dict:
-    """Parse un message SWIFT MT103 et extrait les champs."""
-    parsed = {}
+class SWIFTExtractedMT103(BaseModel):
+    """Structure extraite d'un message SWIFT MT103."""
     
-    # Patterns SWIFT
-    patterns = {
-        ":20:": "reference",
-        ":23B:": "instruction_code",
-        ":32A:": "value_date_currency_amount",
-        ":50K:": "ordering_customer",
-        ":59:": "beneficiary",
-        ":70:": "remittance_info",
-        ":71A:": "charges",
+    # Champ :20: - Référence du transfert
+    reference: str = Field(description="Référence du transfert (:20:)")
+    
+    # Champ :23B: - Code instruction
+    instruction_code: str = Field(default="CRED", description="Code instruction (:23B:)")
+    
+    # Champ :32A: - Date de valeur, devise, montant
+    value_date: str = Field(description="Date de valeur YYYYMMDD")
+    currency: str = Field(description="Code devise ISO 3 lettres")
+    amount: float = Field(description="Montant", gt=0)
+    
+    # Champ :50K: ou :50A: - Ordre donneur (peut être multi-lignes)
+    ordering_customer: str = Field(description="Données ordonnateur (:50K: ou :50A:)")
+    ordering_customer_account: Optional[str] = Field(default=None, description="Compte ordonnateur (IBAN)")
+    
+    # Champ :52A:, :52D: - Banque ordonnateur (optionnel)
+    ordering_bank_bic: Optional[str] = Field(default=None, description="BIC banque ordonnateur (:52A:)")
+    ordering_bank_name: Optional[str] = Field(default=None, description="Nom banque ordonnateur (:52D:)")
+    
+    # Champ :56A:, :56D: - Banque intermédiaire (optionnel)
+    intermediary_bank_bic: Optional[str] = Field(default=None, description="BIC banque intermédiaire (:56A:)")
+    intermediary_bank_name: Optional[str] = Field(default=None, description="Nom banque intermédiaire (:56D:)")
+    
+    # Champ :57A:, :57D: - Banque bénéficiaire (optionnel)
+    beneficiary_bank_bic: Optional[str] = Field(default=None, description="BIC banque bénéficiaire (:57A:)")
+    beneficiary_bank_name: Optional[str] = Field(default=None, description="Nom banque bénéficiaire (:57D:)")
+    
+    # Champ :59: ou :59A: - Bénéficiaire (peut être multi-lignes)
+    beneficiary: str = Field(description="Données bénéficiaire (:59: ou :59A:)")
+    beneficiary_account: Optional[str] = Field(default=None, description="Compte bénéficiaire (IBAN)")
+    
+    # Champ :70: - Information pour le bénéficiaire (optionnel)
+    remittance_info: Optional[str] = Field(default=None, description="Information bénéficiaire (:70:)")
+    
+    # Champ :71A: - Frais
+    charges: str = Field(default="OUR", description="Frais: OUR/SHA/BEN (:71A:)")
+    
+    # Champ :72: - Information pour la banque (optionnel)
+    bank_to_bank_info: Optional[str] = Field(default=None, description="Info banque à banque (:72:)")
+    
+    @field_validator("value_date")
+    def validate_date(cls, v):
+        if len(v) != 8 or not v.isdigit():
+            raise ValueError(f"Date must be YYYYMMDD format, got: {v}")
+        return v
+    
+    @field_validator("currency")
+    def validate_currency(cls, v):
+        if len(v) != 3 or not v.isalpha():
+            raise ValueError(f"Currency must be 3 letter ISO code, got: {v}")
+        return v.upper()
+    
+    @field_validator("charges")
+    def validate_charges(cls, v):
+        valid = ["OUR", "SHA", "BEN"]
+        if v not in valid:
+            raise ValueError(f"Charges must be one of {valid}, got: {v}")
+        return v
+
+
+def parse_swift_mt103(swift_text: str) -> SWIFTExtractedMT103:
+    """
+    Parse un message SWIFT MT103 et extrait tous les champs avec validation.
+    
+    Gère:
+    - Champs multi-lignes (:50K:, :59:, etc.)
+    - Champs optionnels
+    - Extraction des BIC et noms de banques
+    - Validation des formats (dates, devises, montants)
+    """
+    # Nettoyer le texte
+    lines = [line.strip() for line in swift_text.strip().split("\n") if line.strip()]
+    
+    parsed_data = {
+        "reference": "NONREF",
+        "instruction_code": "CRED",
+        "charges": "OUR",
     }
     
-    for line in swift_text.split("\n"):
-        for tag, field_name in patterns.items():
-            if line.startswith(tag):
-                value = line[len(tag):].strip()
-                parsed[field_name] = value
-                
-                # Parser le champ :32A: (date + devise + montant)
-                if field_name == "value_date_currency_amount" and len(value) >= 11:
-                    parsed["value_date"] = value[:8]
-                    parsed["currency"] = value[8:11]
-                    parsed["amount"] = float(value[11:])
-                break
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        
+        # Champ :20: - Référence
+        if line.startswith(":20:"):
+            parsed_data["reference"] = line[4:].strip()
+        
+        # Champ :23B: - Code instruction
+        elif line.startswith(":23B:"):
+            parsed_data["instruction_code"] = line[5:].strip()
+        
+        # Champ :32A: - Date, devise, montant (format: YYYYMMDD + 3 lettres + montant)
+        elif line.startswith(":32A:"):
+            value = line[5:].strip()
+            if len(value) >= 11:
+                parsed_data["value_date"] = value[:8]
+                parsed_data["currency"] = value[8:11].upper()
+                try:
+                    parsed_data["amount"] = float(value[11:].replace(",", "."))
+                except ValueError:
+                    raise ValueError(f"Invalid amount format in :32A: {value[11:]}")
+        
+        # Champ :50K:, :50A:, :50F: - Ordre donneur (peut être multi-lignes)
+        elif line.startswith(":50") and ":" in line:
+            tag_end = line.index(":")
+            tag = line[:tag_end+1]
+            content_parts = [line[tag_end+1:].strip()]
+            i += 1
+            
+            # Lire les lignes suivantes jusqu'au prochain tag
+            while i < len(lines) and not lines[i].startswith(":"):
+                if lines[i].strip():
+                    content_parts.append(lines[i].strip())
+                i += 1
+            i -= 1  # Revenir en arrière car on a avancé trop loin
+            
+            full_content = "\n".join(content_parts)
+            parsed_data["ordering_customer"] = full_content
+            
+            # Extraire le compte (IBAN) si présent
+            iban_match = re.search(r'([A-Z]{2}\d{2}[A-Z0-9\s]{12,34})', full_content)
+            if iban_match:
+                parsed_data["ordering_customer_account"] = iban_match.group(1).replace(" ", "")
+        
+        # Champ :52A:, :52D: - Banque ordonnateur
+        elif line.startswith(":52A:"):
+            parsed_data["ordering_bank_bic"] = line[5:].strip()[:11]
+        elif line.startswith(":52D:"):
+            parsed_data["ordering_bank_name"] = line[5:].strip()
+        
+        # Champ :56A:, :56D: - Banque intermédiaire
+        elif line.startswith(":56A:"):
+            parsed_data["intermediary_bank_bic"] = line[5:].strip()[:11]
+        elif line.startswith(":56D:"):
+            parsed_data["intermediary_bank_name"] = line[5:].strip()
+        
+        # Champ :57A:, :57D: - Banque bénéficiaire
+        elif line.startswith(":57A:"):
+            parsed_data["beneficiary_bank_bic"] = line[5:].strip()[:11]
+        elif line.startswith(":57D:"):
+            parsed_data["beneficiary_bank_name"] = line[5:].strip()
+        
+        # Champ :59:, :59A: - Bénéficiaire (peut être multi-lignes)
+        elif line.startswith(":59"):
+            tag_end = line.index(":")
+            tag = line[:tag_end+1]
+            content_parts = [line[tag_end+1:].strip()]
+            i += 1
+            
+            # Lire les lignes suivantes jusqu'au prochain tag
+            while i < len(lines) and not lines[i].startswith(":"):
+                if lines[i].strip():
+                    content_parts.append(lines[i].strip())
+                i += 1
+            i -= 1
+            
+            full_content = "\n".join(content_parts)
+            parsed_data["beneficiary"] = full_content
+            
+            # Extraire le compte (IBAN) si présent
+            iban_match = re.search(r'([A-Z]{2}\d{2}[A-Z0-9\s]{12,34})', full_content)
+            if iban_match:
+                parsed_data["beneficiary_account"] = iban_match.group(1).replace(" ", "")
+        
+        # Champ :70: - Information pour bénéficiaire
+        elif line.startswith(":70:"):
+            content_parts = [line[4:].strip()]
+            i += 1
+            while i < len(lines) and not lines[i].startswith(":"):
+                if lines[i].strip():
+                    content_parts.append(lines[i].strip())
+                i += 1
+            i -= 1
+            parsed_data["remittance_info"] = "\n".join(content_parts)
+        
+        # Champ :71A: - Frais
+        elif line.startswith(":71A:"):
+            parsed_data["charges"] = line[5:].strip()
+        
+        # Champ :72: - Information banque à banque
+        elif line.startswith(":72:"):
+            content_parts = [line[4:].strip()]
+            i += 1
+            while i < len(lines) and not lines[i].startswith(":"):
+                if lines[i].strip():
+                    content_parts.append(lines[i].strip())
+                i += 1
+            i -= 1
+            parsed_data["bank_to_bank_info"] = "\n".join(content_parts)
+        
+        i += 1
     
-    return parsed
+    # Valider que les champs obligatoires sont présents
+    required_fields = ["value_date", "currency", "amount", "ordering_customer", "beneficiary"]
+    missing = [f for f in required_fields if f not in parsed_data]
+    if missing:
+        raise ValueError(f"Missing required fields: {missing}")
+    
+    return SWIFTExtractedMT103(**parsed_data)
 
 
 async def exemple_generation_swift():
@@ -174,12 +374,44 @@ async def exemple_generation_swift():
     print(result.output)
     print()
     
-    # Extraire les données structurées depuis la réponse
+    # Extraire les données structurées depuis la réponse avec validation
     print("📊 Extraction des données structurées...")
-    extraction = await swift_parser.run(
-        f"Extrais les données structurées du message SWIFT suivant:\n{result.output}"
-    )
-    print(extraction.output[:500])
+    
+    # D'abord, extraire le message SWIFT brut (sans les explications)
+    swift_lines = []
+    for line in result.output.split("\n"):
+        if line.strip().startswith(":") and ":" in line:
+            swift_lines.append(line.strip())
+    
+    if swift_lines:
+        swift_message = "\n".join(swift_lines)
+        print("Message SWIFT extrait:")
+        print(swift_message)
+        print()
+        
+        # Parser avec validation Pydantic avancée
+        try:
+            extracted = parse_swift_mt103_advanced(swift_message)
+            print("✅ Données extraites et validées:")
+            print(f"  Référence: {extracted.field_20}")
+            print(f"  Date: {extracted.field_32A.value_date}")
+            print(f"  Montant: {extracted.field_32A.amount:,.2f} {extracted.field_32A.currency}")
+            print(f"  Ordonnateur: {extracted.field_50K[:50]}...")
+            print(f"  Bénéficiaire: {extracted.field_59[:50]}...")
+            print(f"  Frais: {extracted.field_71A}")
+        except Exception as e:
+            print(f"⚠️ Erreur de parsing structuré: {e}")
+            # Fallback: extraction via LLM
+            extraction = await swift_parser.run(
+                f"Extrais les données structurées du message SWIFT suivant:\n{swift_message}"
+            )
+            print(extraction.output[:500])
+    else:
+        # Fallback si aucun format SWIFT détecté
+        extraction = await swift_parser.run(
+            f"Extrais les données structurées du message SWIFT suivant:\n{result.output}"
+        )
+        print(extraction.output[:500])
 
 
 async def exemple_parsing_swift():
@@ -218,11 +450,38 @@ AVENUE DES CHAMPS ELYSEES 456
     print("✅ Données extraites:")
     print(result.output)
     
-    # Parser technique
-    print("\n🔧 Parsing technique (regex):")
-    parsed = parse_swift_mt103(swift_message)
-    for key, value in parsed.items():
-        print(f"  {key}: {value}")
+    # Parser technique avec validation Pydantic avancée
+    print("\n🔧 Parsing technique avec validation avancée:")
+    try:
+        # Utiliser le parser avancé
+        parsed = parse_swift_mt103_advanced(swift_message)
+        print("✅ Message SWIFT parsé et validé avec succès:")
+        print(f"  Référence (:20:): {parsed.field_20}")
+        print(f"  Code instruction (:23B:): {parsed.field_23B}")
+        print(f"  Date de valeur: {parsed.field_32A.value_date}")
+        print(f"  Devise: {parsed.field_32A.currency}")
+        print(f"  Montant: {parsed.field_32A.amount:,.2f} {parsed.field_32A.currency}")
+        print(f"  Ordonnateur (:50K:):\n    {parsed.field_50K.replace(chr(10), chr(10) + '    ')}")
+        if parsed.ordering_customer_account:
+            print(f"  → IBAN ordonnateur extrait: {parsed.ordering_customer_account}")
+        if parsed.field_52A:
+            print(f"  Banque ordonnateur (:52A:): {parsed.field_52A}")
+        if parsed.field_56A:
+            print(f"  Banque intermédiaire (:56A:): {parsed.field_56A}")
+        if parsed.field_57A:
+            print(f"  Banque bénéficiaire (:57A:): {parsed.field_57A}")
+        print(f"  Bénéficiaire (:59:):\n    {parsed.field_59.replace(chr(10), chr(10) + '    ')}")
+        if parsed.beneficiary_account:
+            print(f"  → IBAN bénéficiaire extrait: {parsed.beneficiary_account}")
+        if parsed.field_70:
+            print(f"  Motif (:70:): {parsed.field_70}")
+        print(f"  Frais (:71A:): {parsed.field_71A}")
+        if parsed.field_72:
+            print(f"  Info banque (:72:): {parsed.field_72}")
+    except Exception as e:
+        print(f"❌ Erreur lors du parsing: {e}")
+        import traceback
+        traceback.print_exc()
 
 
 async def exemple_synthese_swift():
