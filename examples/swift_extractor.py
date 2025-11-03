@@ -81,13 +81,41 @@ class SwiftMT103Parsed(BaseModel):
 def extract_iban_from_text(text: str) -> Optional[str]:
     """Extrait un IBAN depuis un texte (format: 2 lettres + 2 chiffres + 12-34 caractères)."""
     # Pattern IBAN: 2 lettres pays + 2 chiffres + 12-34 alphanumériques
-    pattern = r'\b([A-Z]{2}\d{2}[A-Z0-9\s]{12,34})\b'
-    matches = re.findall(pattern, text)
-    if matches:
-        # Nettoyer (enlever espaces) et retourner le premier match
-        iban = matches[0].replace(" ", "").replace("\n", "")
-        if 15 <= len(iban) <= 34:  # Longueur IBAN valide
-            return iban
+    # Les IBAN ont une longueur fixe par pays, mais on accepte 15-34 caractères
+    pattern = r'([A-Z]{2}\d{2}[A-Z0-9\s]{12,30})'
+    matches = re.finditer(pattern, text)
+    
+    for match in matches:
+        iban_candidate = match.group(1).replace(" ", "").replace("\n", "")
+        
+        # Vérifier la longueur
+        if not (15 <= len(iban_candidate) <= 34):
+            continue
+        
+        # Vérifier qu'on n'a pas capturé du texte après l'IBAN
+        # Les IBAN se terminent typiquement avant un mot (lettre minuscule après majuscules/chiffres)
+        start_pos = match.start()
+        end_pos = match.end()
+        
+        # Si on commence par "/" ou après un "/", c'est probablement un IBAN
+        if start_pos > 0 and text[start_pos - 1] == "/":
+            # Couper au premier caractère non-alphanumérique ou après 34 caractères max
+            iban_clean = iban_candidate[:34] if len(iban_candidate) > 34 else iban_candidate
+            # Si on a capturé trop, chercher une coupure naturelle
+            if len(iban_clean) > 20:  # La plupart des IBAN font 27 caractères
+                # Tronquer à une longueur raisonnable (IBAN max = 34)
+                iban_clean = iban_clean[:34]
+            return iban_clean
+        
+        # Vérifier les caractères après la match
+        if end_pos < len(text):
+            next_char = text[end_pos]
+            # Si le caractère suivant est une lettre minuscule, on a probablement capturé trop
+            if next_char.islower():
+                continue
+        
+        return iban_candidate[:34] if len(iban_candidate) > 34 else iban_candidate
+    
     return None
 
 
@@ -121,7 +149,7 @@ def parse_swift_field_32a(value: str) -> SwiftField32A:
     currency_start = currency_match.start() + 6  # Position de début de la devise
     date_str = value[:currency_start]
     currency_str = currency_match.group(1)
-    amount_str = value[currency_start + 3:].replace(",", ".").strip()
+    amount_str = value[currency_start + 3:].strip()  # Ne pas remplacer les virgules ici
     
     # Convertir YYMMDD en YYYYMMDD si nécessaire
     if len(date_str) == 6:
@@ -135,6 +163,30 @@ def parse_swift_field_32a(value: str) -> SwiftField32A:
     
     if not amount_str:
         raise ValueError(f"Missing amount in :32A: {value}")
+    
+    # Gérer les formats de montants variés
+    # Format européen: 1.234,56 (point pour milliers, virgule pour décimales)
+    # Format anglais: 1,234.56 (virgule pour milliers, point pour décimales)
+    # Format simple: 1234.56 ou 1234,56
+    
+    # Détecter le format
+    has_comma = "," in amount_str
+    has_dot = "." in amount_str
+    
+    if has_comma and has_dot:
+        # Déterminer lequel est le séparateur de décimales
+        comma_pos = amount_str.rfind(",")
+        dot_pos = amount_str.rfind(".")
+        
+        if comma_pos > dot_pos:
+            # Format européen: 1.234,56 → 1234.56
+            amount_str = amount_str.replace(".", "").replace(",", ".")
+        else:
+            # Format anglais: 1,234.56 → 1234.56
+            amount_str = amount_str.replace(",", "")
+    elif has_comma and not has_dot:
+        # Format européen sans milliers: 1234,56 → 1234.56
+        amount_str = amount_str.replace(",", ".")
     
     try:
         amount = float(amount_str)
