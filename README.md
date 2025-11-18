@@ -26,7 +26,10 @@ open-finance-pydanticAI/
 │   └── utils.py           # Utilitaires (parsing, extraction)
 ├── examples/
 │   ├── agent_1_structured_data.py      # Extraction de données structurées
-│   ├── agent_2_tools.py              # Agents avec outils Python
+│   ├── agent_2_tools.py                # Calculs financiers (numpy-financial)
+│   ├── agent_2_tools_quant.py          # Analyse de risque avancée (QuantLib)
+│   ├── agent_option_pricing.py         # Pricing d'options via QuantLib
+│   ├── agent_2_compliance.py           # Contrôle compliance (vérifie les tool calls)
 │   ├── agent_3_multi_step.py           # Workflows multi-étapes
 │   └── test_tool_calls_simple.py       # Tests de vérification des tool calls
 └── docs/
@@ -125,17 +128,29 @@ Voir `docs/qwen3_specifications.md` pour plus de détails.
 ## Exemples disponibles
 
 1. **Extraction de données structurées** (`agent_1_structured_data.py`)
-   - Extraction de données financières depuis du texte non structuré
+   - Extraction et validation automatique via Pydantic
 
-2. **Agents avec outils** (`agent_2_tools.py`)
-   - Intégration d'outils Python pour calculs financiers précis (intérêts composés, prêts, performance)
-   - Utilise numpy-financial pour des calculs testés et précis
+2. **Agent 2 – Calculs financiers** (`agent_2_tools.py`)
+   - Intérêts composés, prêts immobiliers, performances de portefeuille
+   - Outils numpy-financial testés et surveillés
 
-3. **Workflows multi-étapes** (`agent_3_multi_step.py`)
-   - Coordination de plusieurs agents spécialisés
+3. **Agent 2 Quant – Risk Ops** (`agent_2_tools_quant.py`)
+   - VaR paramétrique / historique / Monte Carlo, analyse de portfolio, métriques ajustées
+   - S'adresse aux risk managers et gérants institutionnels
 
-4. **Tests** (`test_tool_calls_simple.py`)
-   - Vérification du fonctionnement des tool calls
+4. **Agent option pricing** (`agent_option_pricing.py`)
+   - Pricing d’un call européen + Greeks via QuantLib
+   - Exemple compact compatible modèles 8 B
+
+5. **Agent 2 Compliance** (`agent_2_compliance.py`)
+   - Enveloppe l’agent financier et vérifie l’usage effectif des outils
+   - Génère un avis “Conforme / Non conforme”
+
+6. **Workflows multi-étapes** (`agent_3_multi_step.py`)
+   - Coordination d’agents spécialisés (risque, fiscalité, optimisation)
+
+7. **Tests de tool calls** (`test_tool_calls_simple.py`)
+   - Harness minimal pour valider la chaîne tool-calling
 
 ## Développement
 
@@ -154,6 +169,9 @@ Les exemples dans `examples/` servent également de tests d'intégration :
 ```bash
 python examples/test_tool_calls_simple.py
 python examples/agent_2_tools.py
+python examples/agent_2_tools_quant.py
+python examples/agent_option_pricing.py
+python examples/agent_2_compliance.py
 ```
 
 ## Limitations et bonnes pratiques

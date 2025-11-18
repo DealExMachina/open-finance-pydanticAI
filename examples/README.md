@@ -48,6 +48,61 @@ Exécution:
 python examples/agent_2_tools.py
 ```
 
+### Agent 2 Quant: Analyse de risque avancée
+**Fichier:** `agent_2_tools_quant.py`
+
+Agent professionnel pour l'analyse quantitative de risque et la gestion d'actifs.
+
+Fonctionnalités:
+- Value at Risk (VaR) - Paramétrique, Historique, Monte Carlo
+- Analyse de risque de portfolio - Volatilité, corrélation, diversification
+- Métriques de performance ajustée du risque - Sharpe, Information Ratio, Beta, Alpha
+- Calculs avancés pour professionnels de la gestion d'actifs
+
+Outils disponibles:
+- `calculer_var_parametrique()` - VaR méthode variance-covariance
+- `calculer_var_historique()` - VaR basée sur données historiques
+- `calculer_var_monte_carlo()` - VaR par simulation stochastique
+- `calculer_risque_portfolio()` - Analyse complète du risque
+- `calculer_metrics_risque_ajuste()` - Performance ajustée du risque
+
+Exécution:
+```bash
+python examples/agent_2_tools_quant.py
+```
+
+Note: Nécessite scipy et pandas. QuantLib-Python est optionnel.
+
+### Agent Option Pricing: Pricing d'options
+**Fichier:** `agent_option_pricing.py`
+
+Agent focalisé sur le pricing de call européen et les Greeks via QuantLib.
+
+Fonctionnalités:
+- Pricing Black-Scholes analytique
+- Calcul Delta / Gamma / Vega / Theta
+- Prise en compte du dividende continu
+
+Exécution:
+```bash
+python examples/agent_option_pricing.py
+```
+
+### Agent 2 Compliance: Vérification des tool calls
+**Fichier:** `agent_2_compliance.py`
+
+Enveloppe l'agent financier et confirme que des outils ont été appelés pour répondre.
+
+Fonctionnalités:
+- Capture du transcript complet
+- Vérification des tool calls réels
+- Avis “Conforme / Non conforme” pour audit interne
+
+Exécution:
+```bash
+python examples/agent_2_compliance.py
+```
+
 ### Agent 3: Workflow multi-étapes
 **Fichier:** `agent_3_multi_step.py`
 
