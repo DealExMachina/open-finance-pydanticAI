@@ -223,7 +223,7 @@ def calculer_taux_interet(
 # Agent avec outils améliorés
 finance_calculator_agent = Agent(
     finance_model,
-    model_settings=ModelSettings(max_output_tokens=2000),
+    model_settings=ModelSettings(max_tokens=2000),
     system_prompt=(
         "Vous êtes un conseiller financier expert avec accès à des outils de calcul financier précis.\n\n"
         "RÈGLES CRITIQUES:\n"

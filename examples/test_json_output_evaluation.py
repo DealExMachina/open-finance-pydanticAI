@@ -14,9 +14,10 @@ Un juge automatique évalue chaque réponse et fournit un score consolidé.
 import asyncio
 import json
 import traceback
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, get_args, get_origin
 from pydantic import BaseModel, Field, ValidationError
 from pydantic_ai import Agent, ModelSettings
+from pydantic_ai.exceptions import ToolRetryError
 
 from app.models import finance_model
 
@@ -206,7 +207,9 @@ extract_agent = Agent(
         "de textes non structurés concernant des portfolios d'actions françaises. "
         "Vous devez TOUJOURS répondre avec un JSON valide qui respecte exactement "
         "le schéma demandé. Vérifiez que tous les champs requis sont présents "
-        "et que les types de données sont corrects."
+        "et que les types de données sont corrects.\n\n"
+        "IMPORTANT: Répondez UNIQUEMENT avec du JSON valide. Ne commencez pas par du texte, "
+        "ne finissez pas par du texte, et ne mettez pas le JSON dans un bloc de code markdown."
     ),
 )
 
@@ -215,19 +218,23 @@ extract_agent = Agent(
 # JUGES D'ÉVALUATION
 # ============================================================================
 
-class JudgeResult(BaseModel):
-    """Résultat d'évaluation d'un juge."""
-    test_num: int
-    test_name: str
-    structure_valid: bool
-    schema_valid: bool
-    semantics_valid: bool
-    completeness_score: float = Field(ge=0.0, le=1.0)
-    correctness_score: float = Field(ge=0.0, le=1.0)
-    overall_score: float = Field(ge=0.0, le=1.0)
-    errors: list[str]
-    warnings: list[str]
-    details: dict[str, Any]
+class JudgeResult:
+    """Résultat d'évaluation d'un test."""
+    def __init__(self, test_num: int, test_name: str, structure_valid: bool, schema_valid: bool,
+                 semantics_valid: bool, completeness_score: float, correctness_score: float,
+                 overall_score: float, errors: List[str], warnings: List[str],
+                 details: Dict[str, Any]):
+        self.test_num = test_num
+        self.test_name = test_name
+        self.structure_valid = structure_valid
+        self.schema_valid = schema_valid
+        self.semantics_valid = semantics_valid
+        self.completeness_score = completeness_score
+        self.correctness_score = correctness_score
+        self.overall_score = overall_score
+        self.errors = errors
+        self.warnings = warnings
+        self.details = details
 
 
 class JSONJudge:
@@ -332,18 +339,94 @@ class JSONJudge:
         )
     
     def _check_semantics(self, data: Any, model: type[BaseModel]) -> bool:
-        """Vérifie la sémantique des données."""
-        # Vérifications de base
+        """Vérifie la sémantique des données en utilisant les métadonnées du modèle."""
         if isinstance(data, dict):
-            # Vérifier que les valeurs numériques positives sont bien positives
+            model_fields = model.model_fields
+            # Obtenir le schéma JSON du modèle une seule fois pour toutes les vérifications
+            try:
+                model_schema = model.model_json_schema()
+                properties_schema = model_schema.get('properties', {})
+            except (AttributeError, TypeError):
+                properties_schema = {}
+            
             for key, value in data.items():
-                if isinstance(value, (int, float)) and key in ["quantite", "prix", "valeur_totale"]:
-                    if value < 0:
+                # Vérifier les contraintes du champ si présent dans le modèle
+                if key in model_fields:
+                    field_info = model_fields[key]
+                    
+                    # Vérifier les contraintes numériques (ge, gt, le, lt) depuis Field
+                    if isinstance(value, (int, float)):
+                        # Utiliser le schéma JSON du modèle pour obtenir les contraintes du champ
+                        field_schema = properties_schema.get(key, {})
+                        
+                        # Check ge (greater than or equal) / minimum
+                        if 'minimum' in field_schema:
+                            if value < field_schema['minimum']:
+                                return False
+                        # Check gt (greater than) / exclusiveMinimum
+                        if 'exclusiveMinimum' in field_schema:
+                            if value <= field_schema['exclusiveMinimum']:
+                                return False
+                        # Check le (less than or equal) / maximum
+                        if 'maximum' in field_schema:
+                            if value > field_schema['maximum']:
+                                return False
+                        # Check lt (less than) / exclusiveMaximum
+                        if 'exclusiveMaximum' in field_schema:
+                            if value >= field_schema['exclusiveMaximum']:
+                                return False
+                    
+                    # Gérer les listes avec validation récursive basée sur le type réel
+                    if isinstance(value, list):
+                        # Extraire le type des éléments de la liste depuis les annotations du modèle
+                        field_annotation = model.model_fields[key].annotation
+                        origin = get_origin(field_annotation)
+                        
+                        if origin is list or origin is List:
+                            item_type = get_args(field_annotation)[0] if get_args(field_annotation) else None
+                            
+                            for item in value:
+                                # Si l'élément est déjà une instance BaseModel, utiliser son type
+                                if isinstance(item, BaseModel):
+                                    if not self._check_semantics(item.model_dump(), type(item)):
+                                        return False
+                                # Si l'élément est un dict et qu'on a un type BaseModel, l'utiliser
+                                elif isinstance(item, dict) and item_type:
+                                    try:
+                                        if issubclass(item_type, BaseModel):
+                                            if not self._check_semantics(item, item_type):
+                                                return False
+                                        else:
+                                            # Type non-BaseModel, validation générique
+                                            if not self._check_semantics(item, model):
+                                                return False
+                                    except TypeError:
+                                        # item_type n'est pas une classe, validation générique
+                                        if not self._check_semantics(item, model):
+                                            return False
+                                # Sinon, validation récursive générique
+                                elif isinstance(item, (dict, list)):
+                                    # Essayer d'utiliser item_type si c'est un BaseModel
+                                    nested_model = model
+                                    if item_type:
+                                        try:
+                                            if issubclass(item_type, BaseModel):
+                                                nested_model = item_type
+                                        except TypeError:
+                                            pass
+                                    if not self._check_semantics(item, nested_model):
+                                        return False
+                
+                # Pour les champs non définis dans le modèle mais présents dans les données
+                # (par exemple dans des dict génériques), validation récursive générique
+                elif isinstance(value, (dict, list)):
+                    if not self._check_semantics(value, model):
                         return False
-                if isinstance(value, list):
-                    for item in value:
-                        if not self._check_semantics(item, model):
-                            return False
+        
+        # Si les données sont une instance BaseModel, valider avec son type
+        elif isinstance(data, BaseModel):
+            return self._check_semantics(data.model_dump(), type(data))
+        
         return True
     
     def get_consolidated_score(self) -> float:
@@ -552,12 +635,28 @@ async def run_test_suite():
             )
             
             # Extraire le JSON de la réponse
-            # Si output_type est utilisé, result.data est déjà un objet Pydantic validé
-            if hasattr(result.data, 'model_dump_json'):
-                response_json = result.data.model_dump_json()
-                validated_data = result.data
-            else:
-                response_json = json.dumps(result.data.model_dump() if hasattr(result.data, 'model_dump') else result.data)
+            # result.data existe seulement si output_type a réussi la validation automatique
+            # Sinon, result.data n'existe pas et on utilise result.output
+            response_json = None
+            validated_data = None
+
+            # Essayer d'accéder à result.data (existe seulement si validation réussie)
+            try:
+                result_data = result.data
+                if result_data is not None:
+                    # Validation automatique réussie, data est un objet Pydantic validé
+                    if hasattr(result_data, 'model_dump_json'):
+                        response_json = result_data.model_dump_json()
+                        validated_data = result_data
+                    elif hasattr(result_data, 'model_dump'):
+                        response_json = json.dumps(result_data.model_dump())
+                        validated_data = result_data
+                    else:
+                        response_json = json.dumps(result_data)
+                        validated_data = result_data
+            except AttributeError:
+                # result.data n'existe pas - validation a échoué ou pas utilisée
+                response_json = result.output
                 validated_data = None
             
             print(f"✅ Réponse reçue (longueur: {len(response_json)} caractères)")
@@ -603,21 +702,49 @@ async def run_test_suite():
             if judge_result.warnings:
                 print(f"  ⚠️  Avertissements: {', '.join(judge_result.warnings)}")
             
-        except ValidationError as e:
-            print(f"❌ Erreur de validation Pydantic: {str(e)}")
-            # Créer un résultat d'échec avec détails de validation
+        except ToolRetryError as e:
+            # Le modèle a échoué à produire un JSON valide après plusieurs tentatives
+            print(f"❌ Échec de validation après retries: {str(e)}")
+            # Essayer d'extraire le dernier output si disponible
+            response_json = "Échec de génération JSON valide"
+            try:
+                if hasattr(e, 'result') and e.result:
+                    response_json = e.result.output
+            except:
+                pass
+
+            # Créer un résultat d'échec
             judge_result = JudgeResult(
                 test_num=test_case['num'],
                 test_name=test_case['name'],
-                structure_valid=True,  # JSON peut être valide mais schéma non
+                structure_valid=False,
                 schema_valid=False,
                 semantics_valid=False,
                 completeness_score=0.0,
                 correctness_score=0.0,
-                overall_score=0.3,  # Score partiel car structure peut être OK
-                errors=[f"Validation Pydantic échouée: {str(e)}"],
+                overall_score=0.0,
+                errors=[f"ToolRetryError: Le modèle n'a pas pu produire un JSON valide après plusieurs tentatives"],
                 warnings=[],
-                details={"validation_errors": [str(err) for err in e.errors()]}
+                details={"exception": str(e), "response_text": response_json}
+            )
+            judge.results.append(judge_result)
+            continue
+        except ValidationError as e:
+            print(f"❌ Erreur de validation Pydantic: {str(e)}")
+            # Créer un résultat d'échec avec détails de validation
+            # ValidationError à ce niveau indique un échec de parsing/structure
+            judge_result = JudgeResult(
+                test_num=test_case['num'],
+                test_name=test_case['name'],
+                structure_valid=False,  # Échec de parsing/structure de la réponse
+                schema_valid=False,
+                semantics_valid=False,
+                completeness_score=0.0,
+                correctness_score=0.0,
+                overall_score=0.0,  # Score à 0 car structure invalide
+                errors=[f"Échec de parsing/structure: Validation Pydantic échouée: {str(e)}"],
+                warnings=[],
+                details={"validation_errors": [str(err) for err in e.errors()], "parsing_failed": True}
             )
             judge.results.append(judge_result)
         except Exception as e:

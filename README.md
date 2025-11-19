@@ -66,6 +66,24 @@ MAX_TOKENS=1500
 TIMEOUT=120
 ```
 
+### Quick Start
+
+```bash
+# Activer l'environnement
+source venv/bin/activate
+
+# Lancer le test simple (100% succès attendu)
+python3 examples/test_json_simple.py
+
+# Si succès (3/3), le modèle est opérationnel!
+```
+
+**Résultat attendu:**
+```
+✅ Succès complets: 3/3 (100%)
+🎉 EXCELLENT! Le modèle gère bien les JSON simples!
+```
+
 ## Utilisation
 
 ### API FastAPI
@@ -116,17 +134,35 @@ Voir le répertoire `examples/` pour plus d'exemples détaillés.
 
 ## Configuration du modèle
 
-Le projet est configuré pour utiliser le modèle `DragonLLM/Qwen-Open-Finance-R-8B` via l'espace Hugging Face qui expose une API compatible OpenAI.
+Le projet est configuré pour utiliser le modèle `DragonLLM/Qwen-Open-Finance-R-8B` (8 milliards de paramètres) via l'espace Hugging Face qui expose une API compatible OpenAI.
 
-Caractéristiques du modèle :
+### Caractéristiques du modèle
 
-- Spécialisé en terminologie financière française
-- Fenêtre de contexte : 32K tokens (base), 128K avec YaRN
-- Limite de génération : ~20K tokens (théorique), pratique 2-3K recommandé
-- Support du raisonnement avec tags `<think>`
-- Support des tool calls (fonctionnalité activée)
+- ✅ Spécialisé en terminologie financière française
+- ✅ Fenêtre de contexte : 32K tokens (base), 128K avec YaRN
+- ✅ Génération JSON structuré avec Pydantic
+- ✅ Support des tool calls
+- ⚠️ Limite de génération : 1500-2000 tokens recommandé pour ce modèle 8B
 
-Voir `docs/qwen3_specifications.md` pour plus de détails.
+### Capacités et limitations (modèle 8B)
+
+**✅ Fonctionne très bien:**
+- Extraction de données financières structurées (positions, portfolios)
+- JSON avec 2-5 champs par objet
+- Listes de 1-10 éléments
+- Calculs financiers via tool calls
+
+**⚠️ Limitations:**
+- Schémas JSON complexes (>3 niveaux imbriqués)
+- Volumes importants (>10 objets par requête)
+- Multi-step reasoning très complexe
+
+**🎯 Résultats attendus:**
+- Tests simples: **100% de succès** ✅
+- Tests moyens: 70-90% de succès
+- Tests complexes: 30-50% de succès (normal pour un 8B)
+
+Voir `docs/model_capabilities_8b.md` et `docs/qwen3_specifications.md` pour plus de détails.
 
 ## Exemples disponibles
 
@@ -155,7 +191,18 @@ Voir `docs/qwen3_specifications.md` pour plus de détails.
 7. **Tests de tool calls** (`test_tool_calls_simple.py`)
    - Harness minimal pour valider la chaîne tool-calling
 
-> **Note importante** : Les exemples fournis dans ce projet sont générés à des fins de démonstration et d'apprentissage. Ils ne sont pas issus de cas d'usage réels de production. Nous encourageons vivement les utilisateurs à proposer des exemples plus pertinents et réalistes basés sur leurs propres expériences via des [Issues GitHub](https://github.com/DealExMachina/open-finance-pydanticAI/issues). Vos contributions aideront à améliorer la qualité et la pertinence des exemples pour la communauté.
+8. **Tests simples 8B** (`test_json_simple.py`) ⭐ **COMMENCER ICI**
+   - 3 tests progressifs calibrés pour modèle 8B
+   - **Résultat: 100% de succès (3/3 tests)** ✅
+   - Démontre les capacités réelles du modèle
+
+9. **Tests JSON avancés** (`test_json_output_evaluation.py`)
+   - Suite de 10 tests de difficulté croissante
+   - Tests 1-3: Doivent passer, Tests 4-10: Échecs attendus pour 8B
+
+📖 **Guide complet**: voir `examples/README.md` et `docs/model_capabilities_8b.md`
+
+> **Note importante**: Les exemples fournis dans ce projet sont générés à des fins de démonstration et d'apprentissage. Ils ne sont pas issus de cas d'usage réels de production. Nous encourageons vivement les utilisateurs à proposer des exemples plus pertinents et réalistes basés sur leurs propres expériences via des [Issues GitHub](https://github.com/DealExMachina/open-finance-pydanticAI/issues). Vos contributions aideront à améliorer la qualité et la pertinence des exemples pour la communauté.
 
 ## Développement
 
@@ -195,10 +242,12 @@ Meilleures pratiques :
 
 ## Documentation technique
 
+- `docs/model_capabilities_8b.md` - ⭐ Guide des capacités et meilleures pratiques pour modèle 8B
 - `docs/qwen3_specifications.md` - Spécifications détaillées du modèle Qwen3
 - `docs/reasoning_models.md` - Gestion des modèles avec raisonnement
 - `docs/generation_limits.md` - Limites de génération et optimisation
 - `docs/financial_libraries_recommendations.md` - Recommandations de bibliothèques financières
+- `examples/README.md` - Guide complet des exemples avec résultats attendus
 
 ## Références
 

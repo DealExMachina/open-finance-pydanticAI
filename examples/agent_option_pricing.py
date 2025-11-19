@@ -55,7 +55,7 @@ def calculer_prix_call_black_scholes(
         day_count = ql.Actual365Fixed()
 
         payoff = ql.PlainVanillaPayoff(ql.Option.Call, strike)
-        maturity_date = evaluation_date + int(maturite_annees * 365)
+        maturity_date = calendar.advance(evaluation_date, ql.Period(round(maturite_annees * 365), ql.Days))
         exercise = ql.EuropeanExercise(maturity_date)
 
         spot_handle = ql.QuoteHandle(ql.SimpleQuote(spot))

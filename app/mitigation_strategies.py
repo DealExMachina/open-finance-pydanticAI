@@ -70,25 +70,14 @@ class ToolCallDetector:
                         tool_calls.append(tool_info)
         except Exception as e:
             # Log error but don't fail
-        if name:
-            parsed_args = args
-            if isinstance(args, str):
-                try:
-                    parsed_args = json.loads(args)
-                except json.JSONDecodeError:
-                    parsed_args = {}
-            elif not isinstance(args, dict):
-                parsed_args = {}
-            
-            return {
-                "name": name,
-                "args": parsed_args,
-                "raw": call
-            }
-        return None
+            pass
+
+    @staticmethod
+    def _extract_tool_info(call) -> Optional[Dict[str, Any]]:
+        """Extrait les informations d'un appel d'outil."""
         name = None
         args = None
-        
+
         # Try different ways to access tool call structure
         if hasattr(call, "function"):
             func = call.function
@@ -103,11 +92,20 @@ class ToolCallDetector:
         elif isinstance(call, dict):
             name = call.get("tool_name") or call.get("name") or call.get("function", {}).get("name")
             args = call.get("args") or call.get("arguments")
-        
+
         if name:
+            parsed_args = args
+            if isinstance(args, str):
+                try:
+                    parsed_args = json.loads(args)
+                except json.JSONDecodeError:
+                    parsed_args = {}
+            elif not isinstance(args, dict):
+                parsed_args = {}
+
             return {
                 "name": name,
-                "args": args if isinstance(args, dict) else (json.loads(args) if isinstance(args, str) else {}),
+                "args": parsed_args,
                 "raw": call
             }
         return None
@@ -520,13 +518,12 @@ def with_json_validation(
 
 class SafeAgent:
     """Wrapper d'agent avec toutes les stratégies de mitigation."""
-    
-                    # Tolérance de 1% pour les arrondis
-                    tolerance = max(valeur_totale * 0.01, 0.01)  # 1% ou 0.01 minimum
-                    if abs(somme_positions - valeur_totale) > tolerance:
-                        errors.append(
-                            f"Valeur totale ({valeur_totale}) ne correspond pas à la somme des positions ({somme_positions})"
-                        )
+
+    def __init__(
+        self,
+        agent: Agent,
+        output_type: Optional[Type[BaseModel]] = None,
+        tool_call_required: bool = False,
         expected_tools: Optional[List[str]] = None,
         max_retries: int = 3,
         semantic_validator: Optional[Callable[[Any], Tuple[bool, List[str]]]] = None
@@ -553,21 +550,64 @@ class SafeAgent:
         prompt: str,
         **kwargs
     ) -> Tuple[RunResult, bool, List[str]]:
-                            if capital > 0 and taux > 0 and duree > 0:
-                                expected = capital * ((1 + taux) ** duree)
-                                # Tolérance de 1% ou 0.01 minimum
-                                tolerance = max(expected * 0.01, 0.01)
-                                if abs(result - expected) > tolerance:
-                                    errors.append(
-                                        f"Calcul valeur future incohérent: attendu ~{expected:.2f}, obtenu {result:.2f}"
-                                    )
-            prompt=prompt,
-            output_type=self.output_type,
-            max_retries=self.max_retries,
-            tool_call_required=self.tool_call_required,
-            expected_tools=self.expected_tools,
-            semantic_validator=self.semantic_validator
-        )
+        """Exécute l'agent avec toutes les stratégies de mitigation."""
+        errors = []
+        success = True
+
+        try:
+            # Exécuter l'agent de base
+            result = await self.agent.run(prompt, **kwargs)
+
+            # Validation de sortie structurée si spécifiée
+            if self.output_type:
+                if hasattr(result, 'data') and result.data:
+                    # Validation automatique réussie
+                    validated_data = result.data
+                else:
+                    # Essayer de parser le texte de sortie
+                    output_text = getattr(result, 'output', '')
+                    if output_text:
+                        try:
+                            # Essayer de parser comme JSON
+                            import json
+                            json_data = json.loads(output_text)
+                            # Valider avec Pydantic
+                            validated_data = self.output_type.model_validate(json_data)
+                            success = True
+                        except (json.JSONDecodeError, ValidationError) as e:
+                            errors.append(f"Échec de validation structurée: {e}")
+                            success = False
+                    else:
+                        errors.append("Aucune sortie produite")
+                        success = False
+
+                # Validation sémantique si spécifiée
+                if success and self.semantic_validator and validated_data:
+                    is_valid, semantic_errors = self.semantic_validator(validated_data)
+                    if not is_valid:
+                        errors.extend(semantic_errors)
+                        success = False
+
+            # Validation des tool calls si requise
+            if self.tool_call_required:
+                tool_calls = ToolCallDetector.extract_tool_calls(result)
+                if not tool_calls:
+                    errors.append("Aucun tool call détecté alors que requis")
+                    success = False
+                elif self.expected_tools:
+                    found_tools = {tc.get('name') for tc in tool_calls}
+                    expected_set = set(self.expected_tools)
+                    if not expected_set.issubset(found_tools):
+                        missing = expected_set - found_tools
+                        errors.append(f"Outils manquants: {', '.join(missing)}")
+                        success = False
+
+        except Exception as e:
+            errors.append(f"Erreur lors de l'exécution: {str(e)}")
+            success = False
+            result = None
+
+        return result, success, errors
     
     async def run(self, prompt: str, **kwargs) -> Any:
         """Exécute l'agent (interface compatible avec Agent.run)."""

@@ -1,143 +1,110 @@
-# Exemples d'Agentique avec PydanticAI
+# Examples - PydanticAI avec Qwen-Open-Finance-R-8B
 
-Ces exemples démontrent différentes capacités agentiques de PydanticAI utilisant le modèle DragonLLM via le Hugging Face Space.
+## 🎯 Exemples Recommandés (Modèle 8B)
 
-## Installation
-
+### ✅ Commencer ici: Tests Simples
 ```bash
-pip install -e ".[dev]"
+python3 examples/test_json_simple.py
+```
+**Résultat attendu**: 100% de succès (3/3 tests)
+
+Ce test démontre que le modèle 8B **fonctionne parfaitement** avec:
+- Schémas simples (Position, Portfolio)
+- Prompts clairs avec exemples
+- Volumes modestes (1-3 positions)
+
+### ✅ Extraction de Portfolio
+```bash
+python3 examples/agent_1_structured_data.py
+```
+Extraction réelle de données financières depuis texte non structuré.
+
+### 🔧 Tests avec Tool Calls
+```bash
+python3 examples/test_tool_calls_simple.py
+```
+Tests des capacités de tool calling du modèle.
+
+### ⚠️ Tests Avancés (Attendez-vous à des échecs)
+```bash
+python3 examples/test_json_output_evaluation.py
+```
+Suite complète de 10 tests progressifs. Le modèle 8B échouera sur les tests complexes (c'est normal).
+
+## 📚 Autres Exemples
+
+### Exemples avec SafeAgent
+- `agent_with_mitigation.py`: Agent avec validation et retry
+- `agent_2_tools.py`: Agent avec outils de calcul
+- `agent_2_tools_quant.py`: Agent quantitatif (nécessite QuantLib)
+
+### Exemples Multi-Step
+- `agent_3_multi_step.py`: Workflow complexe multi-agents
+- `agent_option_pricing.py`: Pricing d'options (nécessite QuantLib)
+
+## 🎓 Comment Interpréter les Résultats
+
+### Tests Simples (test_json_simple.py)
+- **100% succès**: ✅ Tout fonctionne correctement
+- **<100% succès**: ⚠️ Problème de configuration ou connexion
+
+### Tests Avancés (test_json_output_evaluation.py)
+- **Tests 1-3**: Doivent passer (schémas simples)
+- **Tests 4-7**: 50-70% attendu (schémas modérés)
+- **Tests 8-10**: Échecs attendus (trop complexes pour 8B)
+
+## 💡 Si les Tests Échouent
+
+1. **Vérifier la connexion au modèle**:
+```python
+from app.models import finance_model
+from pydantic_ai import Agent
+
+agent = Agent(finance_model, system_prompt="Test")
+result = await agent.run("Hello")
+print(result.output)  # Doit afficher une réponse
 ```
 
-## Exemples
-
-### Agent 1: Extraction de données structurées
-**Fichier:** `agent_1_structured_data.py`
-
-Démontre l'extraction et la validation de données financières structurées à partir de textes non structurés.
-
-Fonctionnalités:
-- Utilisation de `output_type` avec modèles Pydantic
-- Validation automatique des données
-- Extraction d'informations complexes (portfolios, transactions)
-
-Exécution:
-```bash
-python examples/agent_1_structured_data.py
+2. **Vérifier l'accès aux résultats**:
+Les résultats validés sont dans `result.output`, pas `result.data`:
+```python
+result = await agent.run(prompt, output_type=Portfolio)
+portfolio = result.output  # ← C'est ici!
 ```
 
-### Agent 2: Agent avec outils (Tools)
-**Fichier:** `agent_2_tools.py`
+3. **Simplifier les schémas**:
+Si un test échoue, c'est peut-être trop complexe pour un modèle 8B.
 
-Démontre l'utilisation d'outils Python que l'agent peut appeler pour effectuer des calculs financiers précis.
+## 📖 Documentation Complète
 
-Fonctionnalités:
-- Définition d'outils Python (fonctions)
-- Appel automatique d'outils par l'agent
-- Combinaison de raisonnement LLM + calculs précis
-- Utilise numpy-financial pour des calculs testés
+Voir `docs/model_capabilities_8b.md` pour:
+- Capacités et limitations détaillées
+- Meilleures pratiques de prompting
+- Patterns de code recommandés
+- Guide de débogage
 
-Outils disponibles:
-- `calculer_valeur_future()` - Intérêts composés
-- `calculer_versement_mensuel()` - Prêts immobiliers
-- `calculer_performance_portfolio()` - Performance d'investissements
-- `calculer_valeur_actuelle()` - Actualisation
-- `calculer_taux_interet()` - Calcul de taux requis
+## 🚀 Quick Start
 
-Exécution:
 ```bash
-python examples/agent_2_tools.py
+# Activer l'environnement
+source venv/bin/activate
+
+# Installer les dépendances
+pip install -e .
+
+# Lancer le test simple
+python3 examples/test_json_simple.py
+
+# Si succès (3/3), le modèle est prêt!
 ```
 
-### Agent 2 Quant: Analyse de risque avancée
-**Fichier:** `agent_2_tools_quant.py`
+## 📊 Résultats Attendus (Modèle 8B)
 
-Agent professionnel pour l'analyse quantitative de risque et la gestion d'actifs.
+| Test | Complexité | Succès Attendu | Notes |
+|------|-----------|---------------|-------|
+| test_json_simple.py | Faible | 100% (3/3) | Tests calibrés pour 8B |
+| agent_1_structured_data.py | Faible | 100% | Extraction simple |
+| test_tool_calls_simple.py | Moyenne | 75%+ | Tool calling |
+| test_json_output_evaluation.py | Variable | 30-50% | Tests 1-3: OK, 8-10: KO |
 
-Fonctionnalités:
-- Value at Risk (VaR) - Paramétrique, Historique, Monte Carlo
-- Analyse de risque de portfolio - Volatilité, corrélation, diversification
-- Métriques de performance ajustée du risque - Sharpe, Information Ratio, Beta, Alpha
-- Calculs avancés pour professionnels de la gestion d'actifs
-
-Outils disponibles:
-- `calculer_var_parametrique()` - VaR méthode variance-covariance
-- `calculer_var_historique()` - VaR basée sur données historiques
-- `calculer_var_monte_carlo()` - VaR par simulation stochastique
-- `calculer_risque_portfolio()` - Analyse complète du risque
-- `calculer_metrics_risque_ajuste()` - Performance ajustée du risque
-
-Exécution:
-```bash
-python examples/agent_2_tools_quant.py
-```
-
-Note: Nécessite scipy et pandas. QuantLib-Python est optionnel.
-
-### Agent Option Pricing: Pricing d'options
-**Fichier:** `agent_option_pricing.py`
-
-Agent focalisé sur le pricing de call européen et les Greeks via QuantLib.
-
-Fonctionnalités:
-- Pricing Black-Scholes analytique
-- Calcul Delta / Gamma / Vega / Theta
-- Prise en compte du dividende continu
-
-Exécution:
-```bash
-python examples/agent_option_pricing.py
-```
-
-### Agent 2 Compliance: Vérification des tool calls
-**Fichier:** `agent_2_compliance.py`
-
-Enveloppe l'agent financier et confirme que des outils ont été appelés pour répondre.
-
-Fonctionnalités:
-- Capture du transcript complet
-- Vérification des tool calls réels
-- Avis “Conforme / Non conforme” pour audit interne
-
-Exécution:
-```bash
-python examples/agent_2_compliance.py
-```
-
-### Agent 3: Workflow multi-étapes
-**Fichier:** `agent_3_multi_step.py`
-
-Démontre la création d'un workflow où plusieurs agents spécialisés collaborent.
-
-Fonctionnalités:
-- Agents spécialisés (analyse de risque, fiscalité, optimisation)
-- Passage de contexte entre agents
-- Orchestration de workflows complexes
-
-Exécution:
-```bash
-python examples/agent_3_multi_step.py
-```
-
-### Tests: Vérification des tool calls
-**Fichier:** `test_tool_calls_simple.py`
-
-Tests simples pour vérifier que les tool calls fonctionnent correctement.
-
-Exécution:
-```bash
-python examples/test_tool_calls_simple.py
-```
-
-## Points clés démontrés
-
-1. **Extraction structurée**: PydanticAI peut extraire et valider des données complexes
-2. **Outils intégrés**: Les agents peuvent appeler des fonctions Python pour des calculs précis
-3. **Multi-agents**: Plusieurs agents peuvent collaborer pour résoudre des problèmes complexes
-4. **Tool calls**: Le modèle supporte maintenant les tool calls pour exécuter des fonctions Python
-
-## Cas d'usage réels
-
-Ces exemples peuvent être adaptés pour:
-- Analyse de documents financiers: Extraction automatique de données de contrats, factures
-- Calculs financiers interactifs: Assistants qui calculent en temps réel
-- Conseil financier automatisé: Workflows d'analyse multi-domaines
+**Conclusion**: Le modèle 8B est **performant et fiable** sur des tâches appropriées!

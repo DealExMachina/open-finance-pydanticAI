@@ -28,22 +28,33 @@ class Portfolio(BaseModel):
     date_evaluation: str = Field(description="Date d'évaluation")
 
 
-# Agent pour extraction de données structurées
+# Agent pour extraction de données structurées avec prompt optimisé pour petit modèle
 extract_agent = Agent(
     finance_model,
-    model_settings=ModelSettings(max_output_tokens=1200),  # Sufficient for structured data extraction
+    model_settings=ModelSettings(max_output_tokens=1200),
     system_prompt=(
-        "Vous êtes un assistant expert en analyse de données financières. "
-        "Votre rôle est d'extraire des informations structurées à partir "
-        "de textes non structurés concernant des portfolios d'actions françaises. "
-        "Identifiez les symboles, quantités, prix d'achat et dates. "
-        "Calculez la valeur totale du portfolio."
+        "Tu es un expert en analyse financière. Tu extrais des données de portfolios boursiers.\n\n"
+        "RÈGLES STRICTES:\n"
+        "1. Lis attentivement le texte fourni\n"
+        "2. Identifie TOUTES les positions avec: symbole, quantité, prix d'achat, date\n"
+        "3. Calcule la valeur totale: somme de (quantité × prix_achat) pour chaque position\n"
+        "4. Réponds UNIQUEMENT avec un JSON valide, sans texte avant ou après\n\n"
+        "EXEMPLE de réponse attendue:\n"
+        '{\n'
+        '  "positions": [\n'
+        '    {"symbole": "AIR.PA", "quantite": 50, "prix_achat": 120.0, "date_achat": "2024-03-15"},\n'
+        '    {"symbole": "SAN.PA", "quantite": 30, "prix_achat": 85.0, "date_achat": "2024-02-20"}\n'
+        '  ],\n'
+        '  "valeur_totale": 8550.0,\n'
+        '  "date_evaluation": "2024-11-01"\n'
+        '}\n\n'
+        "IMPORTANT: Génère UNIQUEMENT le JSON, commence par { et termine par }"
     ),
 )
 
 
 async def exemple_extraction_portfolio():
-    """Exemple d'extraction de données de portfolio."""
+    """Exemple d'extraction de données de portfolio avec validation Pydantic."""
     texte_non_structure = """
     Mon portfolio actuel :
     - J'ai acheté 50 actions Airbus (AIR.PA) à 120€ le 15 mars 2024
@@ -53,24 +64,68 @@ async def exemple_extraction_portfolio():
     Date d'évaluation : 1er novembre 2024
     """
     
-    print("📊 Agent 1: Extraction de données structurées")
-    print("=" * 60)
+    print("📊 Agent 1: Extraction de données structurées avec PydanticAI")
+    print("=" * 70)
     print(f"Texte d'entrée:\n{texte_non_structure}\n")
     
-    result = await extract_agent.run(
-        f"Extrais les informations du portfolio suivant et formate-les de manière structurée:\n{texte_non_structure}\n\n"
-        "Réponds avec:\n- Le nombre de positions\n- Les détails de chaque position (symbole, quantité, prix, date)\n- La valeur totale estimée"
+    # Prompt optimisé pour modèle 8B
+    prompt = (
+        f"Extrais les données du portfolio suivant en JSON:\n\n"
+        f"{texte_non_structure}\n\n"
+        f"Pour chaque action, fournis: symbole, quantite, prix_achat, date_achat (YYYY-MM-DD).\n"
+        f"Calcule la valeur_totale (somme de quantite × prix_achat).\n"
+        f"Utilise la date_evaluation donnée."
     )
     
-    # Parser la réponse texte (simplifié pour l'exemple)
-    response = result.output
-    # En production, on utiliserait output_type=Portfolio pour validation automatique
-    print("✅ Résultat structuré:")
-    print(response)
-    print("\n💡 Note: Avec output_type=Portfolio, PydanticAI validerait")
-    print("   automatiquement la structure et fournirait un objet typé.")
-    
-    return response
+    try:
+        # Utilisation de output_type pour validation automatique
+        result = await extract_agent.run(prompt, output_type=Portfolio)
+        
+        # Vérifier si result.data existe (validation réussie)
+        portfolio = None
+        try:
+            portfolio = result.data
+        except AttributeError:
+            # result.data n'existe pas, essayer de parser result.output
+            pass
+        
+        if portfolio:
+            print("✅ Extraction réussie avec validation Pydantic!\n")
+            print(f"📈 Résumé du portfolio:")
+            print(f"  - Nombre de positions: {len(portfolio.positions)}")
+            print(f"  - Valeur totale: {portfolio.valeur_totale:,.2f}€")
+            print(f"  - Date d'évaluation: {portfolio.date_evaluation}")
+            print(f"\n📊 Détails des positions:")
+            for i, pos in enumerate(portfolio.positions, 1):
+                valeur = pos.quantite * pos.prix_achat
+                print(f"  {i}. {pos.symbole}: {pos.quantite} actions à {pos.prix_achat}€ = {valeur:,.2f}€")
+                print(f"     Acheté le: {pos.date_achat}")
+            
+            return portfolio
+        else:
+            # Le modèle a peut-être réussi mais le format n'est pas reconnu
+            output = result.output
+            print(f"⚠️  Résultat dans output (pas dans data):")
+            print(f"Output type: {type(output)}")
+            
+            # Si c'est déjà un Portfolio (parfois le cas)
+            if isinstance(output, Portfolio):
+                portfolio = output
+                print("✅ Output est un Portfolio valide!\n")
+                print(f"📈 Résumé du portfolio:")
+                print(f"  - Nombre de positions: {len(portfolio.positions)}")
+                print(f"  - Valeur totale: {portfolio.valeur_totale:,.2f}€")
+                return portfolio
+            else:
+                print(f"Output: {str(output)[:300]}...")
+                return None
+            
+    except Exception as e:
+        print(f"❌ Erreur lors de l'extraction: {e}")
+        print(f"   Type: {type(e).__name__}")
+        print("\n💡 Pour un modèle 8B, la validation stricte peut échouer.")
+        print("   Essayez sans output_type ou avec des schémas plus simples.")
+        return None
 
 
 if __name__ == "__main__":

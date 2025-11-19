@@ -13,7 +13,7 @@ Améliorations:
 """
 
 import asyncio
-from typing import List
+from typing import List, Tuple
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent, ModelSettings, Tool
 import numpy_financial as npf
@@ -306,7 +306,7 @@ compliance_checker = Agent(
 )
 
 
-async def check_compliance(step_name: str, question: str, result, expected_tools: bool = True) -> str:
+async def check_compliance(step_name: str, question: str, result, expected_tools: bool = True) -> Tuple[str, List[str]]:
     """Vérifie la compliance d'une étape du workflow."""
     tool_calls = extract_tool_calls(result)
     
