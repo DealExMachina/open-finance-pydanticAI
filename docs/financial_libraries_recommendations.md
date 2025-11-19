@@ -182,3 +182,4 @@ Voir `examples/agent_2_tools.py` pour une implémentation complète utilisant nu
 - pandas: https://pandas.pydata.org/
 - scipy: https://scipy.org/
 
+
