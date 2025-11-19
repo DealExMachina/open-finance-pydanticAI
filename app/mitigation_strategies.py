@@ -9,18 +9,44 @@ Ce module fournit des mécanismes pour:
 5. Fournir des wrappers de validation pour les agents
 """
 
+import copy
 import json
+import logging
 import re
-from typing import Any, Callable, Dict, List, Optional, Tuple, Type, TypeVar
+from typing import Any, Callable, Dict, List, Optional, Protocol, Tuple, Type, TypeVar
 from pydantic import BaseModel, ValidationError
 from pydantic_ai import Agent
 import asyncio
 from functools import wraps
 
+logger = logging.getLogger(__name__)
+
 # Type alias for agent run result (pydantic_ai returns different types)
 RunResult = Any  # Will be the actual return type from agent.run()
 
 T = TypeVar('T', bound=BaseModel)
+
+
+class RunResultProtocol(Protocol):
+    """Protocol defining the expected structure of agent run results."""
+    def all_messages(self) -> List[Any]: ...
+    output: str
+    data: Any
+
+
+# ============================================================================
+# UTILITAIRES
+# ============================================================================
+
+class EmptyResult:
+    """Résultat vide utilisé comme fallback en cas d'échec."""
+    
+    def __init__(self):
+        self.output = ""
+        self.data = None
+    
+    def all_messages(self):
+        return []
 
 
 # ============================================================================
@@ -44,13 +70,22 @@ class ToolCallDetector:
                         tool_calls.append(tool_info)
         except Exception as e:
             # Log error but don't fail
-            print(f"Warning: Error extracting tool calls: {e}")
-        
-        return tool_calls
-    
-    @staticmethod
-    def _extract_tool_info(call: Any) -> Optional[Dict[str, Any]]:
-        """Extrait les informations d'un tool call."""
+        if name:
+            parsed_args = args
+            if isinstance(args, str):
+                try:
+                    parsed_args = json.loads(args)
+                except json.JSONDecodeError:
+                    parsed_args = {}
+            elif not isinstance(args, dict):
+                parsed_args = {}
+            
+            return {
+                "name": name,
+                "args": parsed_args,
+                "raw": call
+            }
+        return None
         name = None
         args = None
         
@@ -170,7 +205,7 @@ class JSONValidator:
         expected_model: Type[BaseModel],
         semantic_checks: Optional[List[Callable[[Dict[str, Any]], Tuple[bool, str]]]] = None
     ) -> Tuple[bool, List[str]]:
-        """Valide la sémantique des données JSON.
+        """Valide la sémantique des données JSON en utilisant les métadonnées du modèle.
         
         Args:
             json_data: Données JSON à valider
@@ -182,22 +217,62 @@ class JSONValidator:
         """
         errors = []
         
-        # Vérifications de base
+        # Vérifications de base utilisant les métadonnées du modèle
         if isinstance(json_data, dict):
-            # Vérifier que les valeurs numériques positives sont bien positives
+            try:
+                # Obtenir le schéma JSON du modèle pour extraire les contraintes
+                model_schema = expected_model.model_json_schema()
+                properties_schema = model_schema.get('properties', {})
+            except (AttributeError, TypeError):
+                properties_schema = {}
+            
+            # Vérifier les contraintes numériques basées sur le schéma du modèle
             for key, value in json_data.items():
                 if isinstance(value, (int, float)):
-                    if key in ["quantite", "prix", "valeur_totale", "capital_initial"] and value < 0:
-                        errors.append(f"Valeur négative invalide pour {key}: {value}")
-                    if key in ["taux_annuel", "volatilite"] and (value < 0 or value > 1):
-                        errors.append(f"Valeur hors limites pour {key}: {value}")
+                    field_schema = properties_schema.get(key, {})
+                    
+                    # Vérifier les contraintes minimum (ge)
+                    if 'minimum' in field_schema:
+                        if value < field_schema['minimum']:
+                            errors.append(
+                                f"Valeur négative invalide pour {key}: {value} "
+                                f"(minimum attendu: {field_schema['minimum']})"
+                            )
+                    
+                    # Vérifier les contraintes maximum (le)
+                    if 'maximum' in field_schema:
+                        if value > field_schema['maximum']:
+                            errors.append(
+                                f"Valeur hors limites pour {key}: {value} "
+                                f"(maximum attendu: {field_schema['maximum']})"
+                            )
+                    
+                    # Vérifier exclusiveMinimum (gt)
+                    if 'exclusiveMinimum' in field_schema:
+                        if value <= field_schema['exclusiveMinimum']:
+                            errors.append(
+                                f"Valeur invalide pour {key}: {value} "
+                                f"(doit être > {field_schema['exclusiveMinimum']})"
+                            )
+                    
+                    # Vérifier exclusiveMaximum (lt)
+                    if 'exclusiveMaximum' in field_schema:
+                        if value >= field_schema['exclusiveMaximum']:
+                            errors.append(
+                                f"Valeur invalide pour {key}: {value} "
+                                f"(doit être < {field_schema['exclusiveMaximum']})"
+                            )
         
         # Vérifications sémantiques personnalisées
         if semantic_checks:
             for check in semantic_checks:
-                is_valid, error_msg = check(json_data)
-                if not is_valid:
-                    errors.append(error_msg)
+                try:
+                    is_valid, error_msg = check(json_data)
+                    if not is_valid:
+                        errors.append(error_msg)
+                except Exception as e:
+                    logger.warning("Error in semantic check: %s", e, exc_info=True)
+                    errors.append(f"Erreur lors de la validation sémantique: {str(e)}")
         
         return len(errors) == 0, errors
 
@@ -280,24 +355,28 @@ class RetryStrategy:
                 return result, True, []
                 
             except ValidationError as e:
-                errors.append(f"Erreur de validation (tentative {attempt + 1}): {str(e)}")
+                error_msg = f"Erreur de validation (tentative {attempt + 1}): {str(e)}"
+                errors.append(error_msg)
+                logger.warning("Validation error on attempt %d: %s", attempt + 1, e)
                 if attempt < max_retries - 1:
                     continue
+            except (ValueError, TypeError, AttributeError) as e:
+                error_msg = f"Erreur de type/valeur (tentative {attempt + 1}): {str(e)}"
+                errors.append(error_msg)
+                logger.warning("Type/value error on attempt %d: %s", attempt + 1, e, exc_info=True)
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(0.5)  # Petit délai avant retry
+                    continue
             except Exception as e:
-                errors.append(f"Erreur d'exécution (tentative {attempt + 1}): {str(e)}")
+                error_msg = f"Erreur d'exécution inattendue (tentative {attempt + 1}): {str(e)}"
+                errors.append(error_msg)
+                logger.error("Unexpected error on attempt %d: %s", attempt + 1, e, exc_info=True)
                 if attempt < max_retries - 1:
                     await asyncio.sleep(0.5)  # Petit délai avant retry
                     continue
         
         # Créer un résultat vide si nécessaire
         if last_result is None:
-            # Créer un objet minimal avec les attributs attendus
-            class EmptyResult:
-                def __init__(self):
-                    self.output = ""
-                    self.data = None
-                def all_messages(self):
-                    return []
             last_result = EmptyResult()
         
         return last_result, False, errors
@@ -329,17 +408,10 @@ class RetryStrategy:
                 if result.output and result.output.strip():
                     return result, True
             except Exception as e:
-                print(f"Erreur avec prompt: {e}")
+                logger.warning("Error with prompt: %s", e, exc_info=True)
                 continue
         
         # Créer un résultat vide si nécessaire
-        class EmptyResult:
-            def __init__(self):
-                self.output = ""
-                self.data = None
-            def all_messages(self):
-                return []
-        
         return EmptyResult(), False
 
 
@@ -364,17 +436,23 @@ def with_tool_call_validation(
         async def wrapper(*args, **kwargs):
             result = await func(*args, **kwargs)
             
-            if isinstance(result, RunResult):
-                is_valid, errors = ToolCallDetector.validate_tool_calls_required(
-                    result, expected_tools=expected_tools, min_calls=min_calls
-                )
-                
-                if not is_valid:
-                    error_msg = f"Tool call validation failed: {', '.join(errors)}"
-                    if raise_on_failure:
-                        raise ValueError(error_msg)
-                    else:
-                        print(f"⚠️  Warning: {error_msg}")
+            # Check if result has the required attributes for tool call validation
+            if hasattr(result, "all_messages") and callable(getattr(result, "all_messages", None)):
+                try:
+                    is_valid, errors = ToolCallDetector.validate_tool_calls_required(
+                        result, expected_tools=expected_tools, min_calls=min_calls
+                    )
+                    
+                    if not is_valid:
+                        error_msg = f"Tool call validation failed: {', '.join(errors)}"
+                        if raise_on_failure:
+                            raise ValueError(error_msg)
+                        else:
+                            logger.warning("Tool call validation failed: %s", ', '.join(errors))
+                except (AttributeError, TypeError) as e:
+                    logger.warning("Error during tool call validation: %s", e, exc_info=True)
+            else:
+                logger.debug("Result does not have all_messages method, skipping tool call validation")
             
             return result
         return wrapper
@@ -398,24 +476,38 @@ def with_json_validation(
         async def wrapper(*args, **kwargs):
             result = await func(*args, **kwargs)
             
-            if isinstance(result, RunResult):
-                # Si output_type est déjà utilisé, PydanticAI a validé
-                if hasattr(result, 'data') and result.data:
-                    # Validation sémantique supplémentaire
-                    if semantic_validator:
-                        is_valid, errors = semantic_validator(result.data)
-                        if not is_valid:
-                            print(f"⚠️  Semantic validation errors: {', '.join(errors)}")
-                else:
-                    # Essayer d'extraire et valider JSON du texte
-                    if extract_from_text:
-                        json_data = JSONValidator.extract_json_from_text(result.output)
-                        if json_data:
-                            is_valid, validation_error, validated = JSONValidator.validate_json_structure(
-                                json_data, output_type
-                            )
+            # Check if result has the required attributes for JSON validation
+            has_data = hasattr(result, 'data')
+            has_output = hasattr(result, 'output')
+            
+            if has_data or has_output:
+                try:
+                    # Si output_type est déjà utilisé, PydanticAI a validé
+                    if has_data and result.data:
+                        # Validation sémantique supplémentaire
+                        if semantic_validator:
+                            is_valid, errors = semantic_validator(result.data)
                             if not is_valid:
-                                print(f"⚠️  JSON structure validation failed: {validation_error}")
+                                logger.warning("Semantic validation errors: %s", ', '.join(errors))
+                    else:
+                        # Essayer d'extraire et valider JSON du texte
+                        if extract_from_text and has_output:
+                            output_text = getattr(result, 'output', '')
+                            if output_text:
+                                json_data = JSONValidator.extract_json_from_text(output_text)
+                                if json_data:
+                                    is_valid, validation_error, validated = JSONValidator.validate_json_structure(
+                                        json_data, output_type
+                                    )
+                                    if not is_valid:
+                                        logger.warning(
+                                            "JSON structure validation failed: %s",
+                                            validation_error
+                                        )
+                except (AttributeError, TypeError) as e:
+                    logger.warning("Error during JSON validation: %s", e, exc_info=True)
+            else:
+                logger.debug("Result does not have 'data' or 'output' attributes, skipping JSON validation")
             
             return result
         return wrapper
@@ -429,11 +521,12 @@ def with_json_validation(
 class SafeAgent:
     """Wrapper d'agent avec toutes les stratégies de mitigation."""
     
-    def __init__(
-        self,
-        agent: Agent,
-        output_type: Optional[Type[BaseModel]] = None,
-        tool_call_required: bool = False,
+                    # Tolérance de 1% pour les arrondis
+                    tolerance = max(valeur_totale * 0.01, 0.01)  # 1% ou 0.01 minimum
+                    if abs(somme_positions - valeur_totale) > tolerance:
+                        errors.append(
+                            f"Valeur totale ({valeur_totale}) ne correspond pas à la somme des positions ({somme_positions})"
+                        )
         expected_tools: Optional[List[str]] = None,
         max_retries: int = 3,
         semantic_validator: Optional[Callable[[Any], Tuple[bool, List[str]]]] = None
@@ -460,13 +553,14 @@ class SafeAgent:
         prompt: str,
         **kwargs
     ) -> Tuple[RunResult, bool, List[str]]:
-        """Exécute l'agent avec toutes les validations et retries.
-        
-        Returns:
-            Tuple (result, success, errors)
-        """
-        return await RetryStrategy.retry_with_validation(
-            agent=self.agent,
+                            if capital > 0 and taux > 0 and duree > 0:
+                                expected = capital * ((1 + taux) ** duree)
+                                # Tolérance de 1% ou 0.01 minimum
+                                tolerance = max(expected * 0.01, 0.01)
+                                if abs(result - expected) > tolerance:
+                                    errors.append(
+                                        f"Calcul valeur future incohérent: attendu ~{expected:.2f}, obtenu {result:.2f}"
+                                    )
             prompt=prompt,
             output_type=self.output_type,
             max_retries=self.max_retries,
@@ -482,9 +576,11 @@ class SafeAgent:
         if not success and errors and hasattr(result, 'output'):
             # Ajouter les erreurs au résultat si possible
             error_msg = f"\n\n[Erreurs de validation: {', '.join(errors)}]"
-            # Modifier le résultat en place si possible
-            if hasattr(result, 'output'):
-                result.output = result.output + error_msg
+            # Créer une copie pour éviter de modifier l'original
+            existing_output = getattr(result, 'output', '')
+            new_output = existing_output + error_msg
+            result = copy.copy(result)
+            result.output = new_output
         
         return result
 
