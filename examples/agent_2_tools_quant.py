@@ -76,10 +76,13 @@ def calculer_var_parametrique(
     cov_matrix = np.outer(volatilites, volatilites) * corr_matrix
     portfolio_value = np.sum(np.abs(positions))
     weights = positions / portfolio_value if portfolio_value > 0 else np.zeros_like(positions)
-    portfolio_variance = weights.T @ cov_matrix @ weights
+    portfolio_variance = weights.T @ cov_matrix @ weights  # Annualized variance
+    
+    # Calculer l'écart-type annualisé du portfolio
+    portfolio_std_annual = np.sqrt(portfolio_variance)
     
     # Ajuster pour l'horizon temporel (scaling)
-    portfolio_std_daily = np.sqrt(portfolio_variance) * np.sqrt(horizon_jours / 252)
+    portfolio_std_daily = portfolio_std_annual * np.sqrt(horizon_jours / 252)
     
     # Calculer la VaR (z-score pour le niveau de confiance)
     z_score = stats.norm.ppf(1 - niveau_confiance)
@@ -87,10 +90,13 @@ def calculer_var_parametrique(
     var_percentage = (var_absolute / portfolio_value) * 100 if portfolio_value > 0 else 0
     
     # Calculer les contributions individuelles au risque
+    # marginal_var est annualisé (cov_matrix est annualisé)
     marginal_var = cov_matrix @ weights
+    # Euler decomposition: component_var = (weights * marginal_var / portfolio_variance) * var_absolute
+    # Division par portfolio_variance (σ_p²) pour que les contributions somment à la VaR totale
     component_var = (
-        (weights * marginal_var / portfolio_std_daily) * portfolio_value
-        if portfolio_std_daily > 0 else np.zeros(n)
+        (weights * marginal_var / portfolio_variance) * var_absolute
+        if portfolio_variance > 0 else np.zeros(n)
     )
     
     return (
@@ -140,8 +146,12 @@ def calculer_var_historique(
     if rendements.shape[1] != len(positions):
         return f"Erreur: {rendements.shape[1]} actifs dans rendements mais {len(positions)} positions"
     
-    # Calculer les rendements du portfolio
-    portfolio_returns = rendements @ positions
+    # Calculer la valeur du portfolio et les poids normalisés
+    portfolio_value = np.sum(np.abs(positions))
+    weights = positions / portfolio_value if portfolio_value > 0 else np.zeros_like(positions)
+    
+    # Calculer les rendements du portfolio en pourcentage (multiplier rendements par poids)
+    portfolio_returns = rendements @ weights
     
     # Ajuster pour l'horizon (scaling des rendements)
     if horizon_jours > 1:
@@ -150,27 +160,31 @@ def calculer_var_historique(
     else:
         portfolio_returns_scaled = portfolio_returns
     
-    # Calculer la VaR (percentile)
+    # Calculer la VaR (percentile) - maintenant en pourcentage
     percentile = (1 - niveau_confiance) * 100
     var_absolute = abs(np.percentile(portfolio_returns_scaled, percentile))
     
     # Statistiques
-    portfolio_value = np.sum(np.abs(positions))
-    var_percentage = (var_absolute / portfolio_value) * 100 if portfolio_value > 0 else 0
     mean_return = np.mean(portfolio_returns_scaled)
     std_return = np.std(portfolio_returns_scaled)
     
-    # Expected Shortfall (Conditional VaR)
+    # Expected Shortfall (Conditional VaR) - en pourcentage
     tail_losses = portfolio_returns_scaled[portfolio_returns_scaled <= -var_absolute]
     expected_shortfall = abs(np.mean(tail_losses)) if len(tail_losses) > 0 else var_absolute
     
+    # Calculer VaR en euros à partir de la VaR en pourcentage
+    var_absolute_euros = var_absolute * portfolio_value
+    expected_shortfall_euros = expected_shortfall * portfolio_value
+    
     return (
         f"Value at Risk (Historique) - {niveau_confiance*100:.0f}% confiance, {horizon_jours} jour(s):\n"
-        f"  VaR absolue: {var_absolute:,.2f}€\n"
-        f"  VaR relative: {var_percentage:.2f}% du portfolio\n"
-        f"  Expected Shortfall (CVaR): {expected_shortfall:,.2f}€\n"
+        f"  VaR absolue: {var_absolute*100:.2f}% du portfolio\n"
+        f"  VaR absolue (euros): {var_absolute_euros:,.2f}€\n"
+        f"  Expected Shortfall (CVaR): {expected_shortfall*100:.2f}% du portfolio\n"
+        f"  Expected Shortfall (CVaR, euros): {expected_shortfall_euros:,.2f}€\n"
         f"  Rendement moyen (horizon): {mean_return*100:.2f}%\n"
         f"  Volatilité observée: {std_return*100:.2f}%\n"
+        f"  Valeur totale portfolio: {portfolio_value:,.2f}€\n"
         f"  Période d'observation: {len(rendements)} jours\n"
         f"  Percentile utilisé: {percentile:.1f}%"
     )
@@ -306,22 +320,9 @@ def calculer_risque_portfolio(
     portfolio_value = np.sum(np.abs(positions))
     weights = positions / portfolio_value if portfolio_value > 0 else np.zeros(n)
     
-    # Volatilité du portfolio
-    cov_matrix = np.outer(volatilites, volatilites) * corr_matrix
-    portfolio_variance = weights.T @ cov_matrix @ weights
-    portfolio_volatility = np.sqrt(portfolio_variance)
-    
-    # Rendement attendu du portfolio
-    portfolio_return = np.sum(weights * returns)
-    
-    # Corrélation moyenne
-    # Extraire la partie triangulaire supérieure (sans la diagonale)
-    upper_triangle = np.triu(corr_matrix, k=1)
-    avg_correlation = np.mean(upper_triangle[upper_triangle != 0]) if np.any(upper_triangle) else 0
-    
     # Indice de concentration (Herfindahl-Hirschman Index)
     hhi = np.sum(weights ** 2)
-    diversification_ratio = 1 / hhi if hhi > 0 else 0
+    effective_n_securities = 1 / hhi if hhi > 0 else 0
     
     # Contribution au risque par position
     marginal_contrib = cov_matrix @ weights
@@ -330,6 +331,19 @@ def calculer_risque_portfolio(
     # Sharpe Ratio (supposant taux sans risque = 0)
     sharpe_ratio = portfolio_return / portfolio_volatility if portfolio_volatility > 0 else 0
     
+    return (
+        f"Analyse de Risque du Portfolio:\n"
+        f"  Valeur totale: {portfolio_value:,.2f}€\n"
+        f"  Nombre de positions: {n}\n\n"
+        f"Rendement et Risque:\n"
+        f"  Rendement attendu (annualisé): {portfolio_return*100:.2f}%\n"
+        f"  Volatilité (annualisée): {portfolio_volatility*100:.2f}%\n"
+        f"  Sharpe Ratio: {sharpe_ratio:.3f}\n\n"
+        f"Diversification:\n"
+        f"  Corrélation moyenne: {avg_correlation:.3f}\n"
+        f"  Indice de concentration (HHI): {hhi:.3f}\n"
+        f"  Nombre effectif de titres: {effective_n_securities:.2f}\n"
+        f"  (1 = concentré, {n} = parfaitement diversifié)\n\n"
     return (
         f"Analyse de Risque du Portfolio:\n"
         f"  Valeur totale: {portfolio_value:,.2f}€\n"
