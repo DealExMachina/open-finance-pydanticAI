@@ -82,6 +82,7 @@ def calculer_var_parametrique(
     portfolio_std_annual = np.sqrt(portfolio_variance)
     
     # Ajuster pour l'horizon temporel (scaling)
+    # 252 = jours de trading par an (jours ouvrés, excluant weekends et jours fériés)
     portfolio_std_daily = portfolio_std_annual * np.sqrt(horizon_jours / 252)
     
     # Calculer la VaR (z-score pour le niveau de confiance)
@@ -92,11 +93,11 @@ def calculer_var_parametrique(
     # Calculer les contributions individuelles au risque
     # marginal_var est annualisé (cov_matrix est annualisé)
     marginal_var = cov_matrix @ weights
-    # Euler decomposition: component_var = (weights * marginal_var / portfolio_variance) * var_absolute
-    # Division par portfolio_variance (σ_p²) pour que les contributions somment à la VaR totale
+    # Euler decomposition: component_var = (weights * marginal_var / portfolio_std) * var_absolute
+    # Division par portfolio_std_annual (σ_p) pour que les contributions somment à la VaR totale
     component_var = (
-        (weights * marginal_var / portfolio_variance) * var_absolute
-        if portfolio_variance > 0 else np.zeros(n)
+        (weights * marginal_var / portfolio_std_annual) * var_absolute
+        if portfolio_std_annual > 0 else np.zeros(n)
     )
     
     return (
@@ -248,6 +249,7 @@ def calculer_var_monte_carlo(
         correlated_shocks = L @ random_shocks
         
         # Calculer les rendements simulés
+        # 252 = jours de trading par an (jours ouvrés, excluant weekends et jours fériés)
         dt = horizon_jours / 252
         returns = means * dt + volatilites * np.sqrt(dt) * correlated_shocks
         
@@ -320,13 +322,30 @@ def calculer_risque_portfolio(
     portfolio_value = np.sum(np.abs(positions))
     weights = positions / portfolio_value if portfolio_value > 0 else np.zeros(n)
     
+    # Calculer la matrice de covariance
+    cov_matrix = np.outer(volatilites, volatilites) * corr_matrix
+    
+    # Calculer le rendement du portfolio
+    portfolio_return = np.dot(weights, returns)
+    
+    # Calculer la variance et volatilité du portfolio
+    portfolio_variance = weights.T @ cov_matrix @ weights
+    portfolio_volatility = np.sqrt(portfolio_variance)
+    
+    # Calculer la corrélation moyenne (hors diagonale)
+    mask = ~np.eye(n, dtype=bool)  # Masque pour exclure la diagonale
+    avg_correlation = np.mean(corr_matrix[mask])
+    
     # Indice de concentration (Herfindahl-Hirschman Index)
     hhi = np.sum(weights ** 2)
     effective_n_securities = 1 / hhi if hhi > 0 else 0
     
-    # Contribution au risque par position
+    # Contribution au risque par position (Euler decomposition)
     marginal_contrib = cov_matrix @ weights
-    component_risk = weights * marginal_contrib / portfolio_volatility if portfolio_volatility > 0 else np.zeros(n)
+    component_risk = (
+        (weights * marginal_contrib / portfolio_variance) * portfolio_volatility
+        if portfolio_variance > 0 else np.zeros(n)
+    )
     
     # Sharpe Ratio (supposant taux sans risque = 0)
     sharpe_ratio = portfolio_return / portfolio_volatility if portfolio_volatility > 0 else 0
@@ -344,19 +363,6 @@ def calculer_risque_portfolio(
         f"  Indice de concentration (HHI): {hhi:.3f}\n"
         f"  Nombre effectif de titres: {effective_n_securities:.2f}\n"
         f"  (1 = concentré, {n} = parfaitement diversifié)\n\n"
-    return (
-        f"Analyse de Risque du Portfolio:\n"
-        f"  Valeur totale: {portfolio_value:,.2f}€\n"
-        f"  Nombre de positions: {n}\n\n"
-        f"Rendement et Risque:\n"
-        f"  Rendement attendu (annualisé): {portfolio_return*100:.2f}%\n"
-        f"  Volatilité (annualisée): {portfolio_volatility*100:.2f}%\n"
-        f"  Sharpe Ratio: {sharpe_ratio:.3f}\n\n"
-        f"Diversification:\n"
-        f"  Corrélation moyenne: {avg_correlation:.3f}\n"
-        f"  Indice de concentration (HHI): {hhi:.3f}\n"
-        f"  Ratio de diversification: {diversification_ratio:.2f}\n"
-        f"  (1 = parfaitement diversifié, {n} = concentré)\n\n"
         f"Contributions au risque:\n" +
         "\n".join([f"  Position {i+1}: {component_risk[i]*100:.2f}% (poids: {weights[i]*100:.1f}%)" 
                   for i in range(n)])
@@ -366,7 +372,8 @@ def calculer_risque_portfolio(
 def calculer_metrics_risque_ajuste(
     rendements_portfolio: List[float],
     rendements_benchmark: List[float],
-    taux_sans_risque: float = 0.0
+    taux_sans_risque: float = 0.0,
+    frequence: str = "mensuel"
 ) -> str:
     """OBLIGATOIRE: Calcule les métriques de performance ajustée du risque.
     
@@ -377,11 +384,13 @@ def calculer_metrics_risque_ajuste(
     - rendements_portfolio: [0.02, -0.01, 0.015, 0.03, ...] (rendements mensuels du portfolio)
     - rendements_benchmark: [0.015, -0.008, 0.012, 0.025, ...] (rendements mensuels du benchmark)
     - taux_sans_risque: 0.0 (taux sans risque annuel, défaut: 0%)
+    - frequence: "mensuel" (défaut) ou "quotidien" - fréquence des rendements fournis
     
     Args:
-        rendements_portfolio: Liste des rendements historiques du portfolio (mensuels ou quotidiens)
+        rendements_portfolio: Liste des rendements historiques du portfolio
         rendements_benchmark: Liste des rendements historiques du benchmark (même fréquence)
         taux_sans_risque: Taux sans risque annuel (défaut: 0.0 pour 0%)
+        frequence: Fréquence des rendements - "mensuel" (défaut) ou "quotidien"
     
     Returns:
         Métriques complètes: Sharpe, Information Ratio, Beta, Alpha, Maximum Drawdown
@@ -392,11 +401,19 @@ def calculer_metrics_risque_ajuste(
     if len(returns_p) != len(returns_b):
         return f"Erreur: {len(returns_p)} rendements portfolio mais {len(returns_b)} rendements benchmark"
     
-    # Statistiques de base
-    mean_p = np.mean(returns_p) * 252  # Annualisé
-    mean_b = np.mean(returns_b) * 252
-    std_p = np.std(returns_p) * np.sqrt(252)
-    std_b = np.std(returns_b) * np.sqrt(252)
+    # Déterminer le facteur d'annualisation selon la fréquence
+    if frequence == "mensuel":
+        annualization_factor = 12  # 12 mois par an
+    elif frequence == "quotidien":
+        annualization_factor = 252  # Jours de trading par an (jours ouvrés, excluant weekends et jours fériés)
+    else:
+        return f"Erreur: fréquence '{frequence}' non supportée (utiliser 'mensuel' ou 'quotidien')"
+    
+    # Statistiques de base (annualisées)
+    mean_p = np.mean(returns_p) * annualization_factor
+    mean_b = np.mean(returns_b) * annualization_factor
+    std_p = np.std(returns_p) * np.sqrt(annualization_factor)
+    std_b = np.std(returns_b) * np.sqrt(annualization_factor)
     
     # Sharpe Ratio
     sharpe_p = (mean_p - taux_sans_risque) / std_p if std_p > 0 else 0
@@ -404,10 +421,10 @@ def calculer_metrics_risque_ajuste(
     
     # Tracking Error
     active_returns = returns_p - returns_b
-    tracking_error = np.std(active_returns) * np.sqrt(252)
+    tracking_error = np.std(active_returns) * np.sqrt(annualization_factor)
     
     # Information Ratio
-    active_return_mean = np.mean(active_returns) * 252
+    active_return_mean = np.mean(active_returns) * annualization_factor
     information_ratio = active_return_mean / tracking_error if tracking_error > 0 else 0
     
     # Beta
