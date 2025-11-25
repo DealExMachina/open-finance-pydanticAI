@@ -6,8 +6,14 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     """Application settings."""
     
+    # API endpoint selection: "hf" for Hugging Face Space, "koyeb" for Koyeb vLLM
+    api_endpoint: str = "koyeb"  # Options: "hf" or "koyeb"
+    
     # Hugging Face Space OpenAI API endpoint
     hf_space_url: str = "https://jeanbaptdzd-open-finance-llm-8b.hf.space"
+    
+    # Koyeb vLLM OpenAI API endpoint (optimized with CUDA)
+    koyeb_url: str = "https://dragon-llm-dealexmachina-673cae4f.koyeb.app"
     
     # OpenAI-compatible API settings
     api_key: str = "not-needed"  # No authentication required
@@ -41,6 +47,13 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",
     )
+    
+    @property
+    def base_url(self) -> str:
+        """Get the current API base URL based on endpoint selection."""
+        if self.api_endpoint.lower() == "koyeb":
+            return f"{self.koyeb_url}/v1"
+        return f"{self.hf_space_url}/v1"
 
 
 settings = Settings()

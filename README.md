@@ -59,12 +59,23 @@ pip install -e ".[dev]"
 Créez un fichier `.env` :
 
 ```env
+# Endpoint selection: "hf" for Hugging Face Space, "koyeb" for Koyeb vLLM (default: koyeb)
+API_ENDPOINT=koyeb
+
+# Hugging Face Space endpoint (used when API_ENDPOINT=hf)
 HF_SPACE_URL=https://jeanbaptdzd-open-finance-llm-8b.hf.space
+
+# Koyeb vLLM endpoint (used when API_ENDPOINT=koyeb)
+KOYEB_URL=https://dragon-llm-dealexmachina-673cae4f.koyeb.app
+
+# API settings
 API_KEY=not-needed
 MODEL_NAME=dragon-llm-open-finance
 MAX_TOKENS=1500
 TIMEOUT=120
 ```
+
+**Note:** Le déploiement Koyeb utilise vLLM avec optimisations CUDA (Flash Attention 2, PagedAttention) pour de meilleures performances. Par défaut, `API_ENDPOINT=koyeb` est utilisé.
 
 ### Quick Start
 
@@ -134,7 +145,20 @@ Voir le répertoire `examples/` pour plus d'exemples détaillés.
 
 ## Configuration du modèle
 
-Le projet est configuré pour utiliser le modèle `DragonLLM/Qwen-Open-Finance-R-8B` (8 milliards de paramètres) via l'espace Hugging Face qui expose une API compatible OpenAI.
+Le projet est configuré pour utiliser le modèle `DragonLLM/Qwen-Open-Finance-R-8B` (8 milliards de paramètres) via une API compatible OpenAI.
+
+**Deux endpoints disponibles :**
+
+1. **Koyeb vLLM** (par défaut) - Déploiement optimisé avec vLLM et CUDA
+   - Flash Attention 2, PagedAttention, continuous batching
+   - Meilleures performances pour la production
+   - URL: `https://dragon-llm-dealexmachina-673cae4f.koyeb.app`
+
+2. **Hugging Face Space** - Déploiement via Transformers
+   - Backend Transformers standard
+   - URL: `https://jeanbaptdzd-open-finance-llm-8b.hf.space`
+
+Utilisez `API_ENDPOINT=koyeb` ou `API_ENDPOINT=hf` dans votre `.env` pour sélectionner l'endpoint.
 
 ### Caractéristiques du modèle
 
