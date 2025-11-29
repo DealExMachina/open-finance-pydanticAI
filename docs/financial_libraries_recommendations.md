@@ -125,7 +125,7 @@ annual_return = (1 + returns).prod() ** (252 / len(returns)) - 1
 
 ## Recommandation pour ce Projet
 
-### Pour `agent_2_tools.py`:
+### Pour `agent_2.py`:
 
 **Option 1: numpy-financial** (Recommandé)
 - ✅ Simple et suffisant pour les calculs de base
@@ -171,7 +171,7 @@ valeur_future = npf.fv(rate=taux_annuel, nper=duree_annees, pmt=0, pv=-capital_i
 
 ## Exemple d'Intégration Complète
 
-Voir `examples/agent_2_tools.py` pour une implémentation complète utilisant numpy-financial.
+Voir `examples/agent_2.py` pour une implémentation complète utilisant numpy-financial.
 
 ---
 

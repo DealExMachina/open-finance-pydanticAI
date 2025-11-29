@@ -156,7 +156,7 @@ async def extract_with_fallback(agent, prompt, output_type):
 ## 🚀 Exemples Fonctionnels
 
 ### Exemple 1: Extraction Simple
-Voir: `examples/agent_1_structured_data.py`
+Voir: `examples/agent_1.py`
 - Portfolio avec 3 positions
 - Calcul de total
 - ✅ Fonctionne à 100%

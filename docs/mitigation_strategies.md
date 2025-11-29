@@ -169,7 +169,7 @@ async def extract_portfolio(prompt: str):
 
 ## Application aux Exemples Existants
 
-### Agent 2 Tools (`agent_2_tools.py`)
+### Agent 2 Tools (`agent_2.py`)
 
 **Problème:** Le modèle peut ne pas appeler les outils pour les calculs.
 
@@ -189,7 +189,7 @@ safe_finance_agent = SafeAgent(
 result, success, errors = await safe_finance_agent.run_safe(question)
 ```
 
-### Agent 1 Structured Data (`agent_1_structured_data.py`)
+### Agent 1 Structured Data (`agent_1.py`)
 
 **Problème:** JSON peut être mal formé ou incomplet.
 
@@ -210,7 +210,7 @@ result, success, errors = await safe_extract_agent.run_safe(
 )
 ```
 
-### Agent 2 Quant (`agent_2_tools_quant.py`)
+### Agent 2 Quant (removed - functionality merged into agent_2.py)
 
 **Problème:** Tool calls complexes avec plusieurs outils, risque d'échec.
 
@@ -226,7 +226,7 @@ safe_quant_agent = SafeAgent(
 )
 ```
 
-### Agent 3 Multi-Step (`agent_3_multi_step.py`)
+### Agent 3 Multi-Step (`agent_3.py`)
 
 **Problème:** Workflow complexe avec plusieurs agents, validation nécessaire à chaque étape.
 
