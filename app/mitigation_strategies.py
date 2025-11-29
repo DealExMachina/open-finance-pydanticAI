@@ -70,7 +70,9 @@ class ToolCallDetector:
                         tool_calls.append(tool_info)
         except Exception as e:
             # Log error but don't fail
-            pass
+            logger.debug(f"Error extracting tool calls: {e}")
+        
+        return tool_calls
 
     @staticmethod
     def _extract_tool_info(call) -> Optional[Dict[str, Any]]:

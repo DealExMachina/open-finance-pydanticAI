@@ -1,20 +1,23 @@
 """Example agents showcasing financial tooling integrations."""
 
-from . import agent_1_structured_data
+from . import agent_1
+from . import agent_2
 from . import agent_2_compliance
-from . import agent_2_tools
-from . import agent_2_tools_quant
-from . import agent_3_multi_step
-from . import agent_option_pricing
-from . import test_tool_calls_simple
+from . import agent_3
+from . import agent_4
+from . import agent_4_compliance
+from . import agent_5
+from . import agent_5_validator
+from . import agent_5_risk
 
 __all__ = [
-    "agent_1_structured_data",
+    "agent_1",
+    "agent_2",
     "agent_2_compliance",
-    "agent_2_tools",
-    "agent_2_tools_quant",
-    "agent_3_multi_step",
-    "agent_option_pricing",
-    "test_tool_calls_simple",
+    "agent_3",
+    "agent_4",
+    "agent_4_compliance",
+    "agent_5",
+    "agent_5_validator",
+    "agent_5_risk",
 ]
-

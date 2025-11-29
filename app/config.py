@@ -3,21 +3,42 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+# Available endpoints
+ENDPOINTS = {
+    "koyeb": {
+        "url": "https://dragon-llm-dealexmachina-673cae4f.koyeb.app",
+        "model": "DragonLLM/Qwen-Open-Finance-R-8B",  # vLLM requires exact model name
+    },
+    "hf": {
+        "url": "https://jeanbaptdzd-open-finance-llm-8b.hf.space",
+        "model": "dragon-llm-open-finance",  # HF Space accepts any name
+    },
+}
+
+
 class Settings(BaseSettings):
     """Application settings."""
     
-    # API endpoint selection: "hf" for Hugging Face Space, "koyeb" for Koyeb vLLM
-    api_endpoint: str = "koyeb"  # Options: "hf" or "koyeb"
+    # Endpoint selection: "koyeb" or "hf"
+    endpoint: str = "koyeb"
     
-    # Hugging Face Space OpenAI API endpoint
-    hf_space_url: str = "https://jeanbaptdzd-open-finance-llm-8b.hf.space"
+    @property
+    def base_url(self) -> str:
+        """Get the base URL for the selected endpoint."""
+        return ENDPOINTS.get(self.endpoint, ENDPOINTS["koyeb"])["url"]
     
-    # Koyeb vLLM OpenAI API endpoint (optimized with CUDA)
-    koyeb_url: str = "https://dragon-llm-dealexmachina-673cae4f.koyeb.app"
+    @property
+    def model_name(self) -> str:
+        """Get the model name for the selected endpoint."""
+        return ENDPOINTS.get(self.endpoint, ENDPOINTS["koyeb"])["model"]
+    
+    # Legacy alias for compatibility
+    @property
+    def hf_space_url(self) -> str:
+        return self.base_url
     
     # OpenAI-compatible API settings
-    api_key: str = "not-needed"  # No authentication required
-    model_name: str = "DragonLLM/Qwen-Open-Finance-R-8B"
+    api_key: str = "not-needed"
     
     # API configuration
     timeout: float = 120.0
@@ -47,13 +68,6 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",
     )
-    
-    @property
-    def base_url(self) -> str:
-        """Get the current API base URL based on endpoint selection."""
-        if self.api_endpoint.lower() == "koyeb":
-            return f"{self.koyeb_url}/v1"
-        return f"{self.hf_space_url}/v1"
 
 
 settings = Settings()

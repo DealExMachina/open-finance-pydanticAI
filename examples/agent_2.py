@@ -11,13 +11,25 @@ Recommandations de bibliothèques:
 """
 
 import asyncio
-from typing import Annotated
-from pydantic import BaseModel
+from typing import Annotated, Dict, Any
+from pydantic import BaseModel, Field
 from pydantic_ai import Agent, ModelSettings
 import numpy as np
 import numpy_financial as npf
 
 from app.models import finance_model
+
+
+# ============================================================================
+# STRUCTURED OUTPUT MODEL
+# ============================================================================
+
+class FinancialCalculationResult(BaseModel):
+    """Structured result for financial calculations."""
+    calculation_type: str = Field(description="Type of calculation performed (e.g., 'future_value', 'loan_payment')")
+    result: float = Field(description="The calculated result value")
+    input_parameters: Dict[str, Any] = Field(description="Input parameters used for the calculation")
+    explanation: str = Field(description="Brief explanation of the calculation and result")
 
 
 # ============================================================================
@@ -34,32 +46,35 @@ def calculer_valeur_future(
     Utilise numpy-financial.fv() pour un calcul précis et testé.
     
     Args:
-        capital_initial: Montant initial en euros (valeur négative pour fv)
-        taux_annuel: Taux d'intérêt annuel (ex: 0.05 pour 5%)
+        capital_initial: Montant initial en euros (valeur positive, ex: 50000)
+        taux_annuel: Taux d'intérêt annuel (ex: 0.04 pour 4%)
         duree_annees: Durée en années
     
     Returns:
         Valeur future calculée avec détails
     """
+    # Normalize input: accept positive value, convert to absolute value
+    capital_abs = abs(capital_initial)
+    
     # npf.fv(rate, nper, pmt, pv)
     # rate: taux par période
     # nper: nombre de périodes
     # pmt: paiement par période (0 pour investissement unique)
-    # pv: valeur présente (négative car sortie de fonds)
+    # pv: valeur présente (négative car sortie de fonds pour numpy-financial)
     valeur_future = npf.fv(
         rate=taux_annuel,
         nper=duree_annees,
         pmt=0,
-        pv=-capital_initial  # Négatif car c'est une sortie
+        pv=-capital_abs  # Négatif car c'est une sortie de fonds
     )
     
-    interets = valeur_future - capital_initial
-    rendement_pct = (interets / capital_initial) * 100
+    interets = valeur_future - capital_abs
+    rendement_pct = (interets / capital_abs) * 100
     
     return (
         f"Valeur future: {valeur_future:,.2f}€\n"
         f"Intérêts générés: {interets:,.2f}€ ({rendement_pct:.2f}%)\n"
-        f"Capital initial: {capital_initial:,.2f}€\n"
+        f"Capital initial: {capital_abs:,.2f}€\n"
         f"Taux annuel: {taux_annuel*100:.2f}%\n"
         f"Durée: {duree_annees} ans"
     )
@@ -75,36 +90,38 @@ def calculer_versement_mensuel(
     Utilise numpy-financial.pmt() pour un calcul précis.
     
     Args:
-        capital_emprunte: Montant emprunté en euros
-        taux_annuel: Taux d'intérêt annuel (ex: 0.04 pour 4%)
+        capital_emprunte: Montant emprunté en euros (valeur positive, ex: 200000)
+        taux_annuel: Taux d'intérêt annuel (ex: 0.035 pour 3.5%)
         duree_mois: Durée du prêt en mois
     
     Returns:
         Versement mensuel calculé avec détails
     """
+    # Normalize input: accept positive value
+    capital_abs = abs(capital_emprunte)
     taux_mensuel = taux_annuel / 12
     
     # npf.pmt(rate, nper, pv)
     # rate: taux par période (mensuel)
     # nper: nombre de périodes (mois)
-    # pv: valeur présente (montant emprunté, positif car entrée)
+    # pv: valeur présente (montant emprunté, positif car entrée de fonds)
     versement = -npf.pmt(
         rate=taux_mensuel,
         nper=duree_mois,
-        pv=capital_emprunte
+        pv=capital_abs
     )  # Négatif car c'est une sortie, on inverse le signe
     
     total_rembourse = versement * duree_mois
-    cout_total = total_rembourse - capital_emprunte
+    cout_total = total_rembourse - capital_abs
     
     # Calcul du tableau d'amortissement (première et dernière échéance)
     # Première échéance: principal = versement - intérêts
-    interets_premiere = capital_emprunte * taux_mensuel
+    interets_premiere = capital_abs * taux_mensuel
     principal_premiere = versement - interets_premiere
     
     return (
         f"Versement mensuel: {versement:,.2f}€\n"
-        f"Capital emprunté: {capital_emprunte:,.2f}€\n"
+        f"Capital emprunté: {capital_abs:,.2f}€\n"
         f"Total remboursé: {total_rembourse:,.2f}€\n"
         f"Coût total du crédit: {cout_total:,.2f}€\n"
         f"Taux mensuel: {taux_mensuel*100:.4f}%\n"
@@ -161,26 +178,33 @@ def calculer_valeur_actuelle(
     Utilise numpy-financial.pv() pour un calcul précis.
     
     Args:
-        valeur_future: Valeur future en euros
-        taux_annuel: Taux d'actualisation annuel (ex: 0.05 pour 5%)
+        valeur_future: Valeur future en euros (valeur positive, ex: 100000)
+        taux_annuel: Taux d'actualisation annuel (ex: 0.03 pour 3%)
         duree_annees: Durée en années
     
     Returns:
         Valeur actuelle calculée
     """
+    # Normalize input: accept positive value
+    valeur_future_abs = abs(valeur_future)
+    
     # npf.pv(rate, nper, pmt, fv)
+    # rate: taux par période
+    # nper: nombre de périodes
+    # pmt: paiement par période (0)
+    # fv: valeur future (négative car entrée future pour numpy-financial)
     valeur_actuelle = -npf.pv(
         rate=taux_annuel,
         nper=duree_annees,
         pmt=0,
-        fv=-valeur_future  # Négatif car entrée future
+        fv=-valeur_future_abs  # Négatif car entrée future
     )
     
-    actualisation = valeur_future - valeur_actuelle
+    actualisation = valeur_future_abs - valeur_actuelle
     
     return (
         f"Valeur actuelle: {valeur_actuelle:,.2f}€\n"
-        f"Valeur future: {valeur_future:,.2f}€\n"
+        f"Valeur future: {valeur_future_abs:,.2f}€\n"
         f"Actualisation: {actualisation:,.2f}€\n"
         f"Taux d'actualisation: {taux_annuel*100:.2f}%\n"
         f"Durée: {duree_annees} ans"
@@ -197,33 +221,41 @@ def calculer_taux_interet(
     Utilise numpy-financial.rate() pour un calcul précis.
     
     Args:
-        capital_initial: Montant initial en euros
-        valeur_future: Valeur future souhaitée en euros
+        capital_initial: Montant initial en euros (valeur positive, ex: 25000)
+        valeur_future: Valeur future souhaitée en euros (valeur positive, ex: 50000)
         duree_annees: Durée en années
     
     Returns:
         Taux d'intérêt calculé
     """
+    # Normalize inputs: accept positive values
+    capital_abs = abs(capital_initial)
+    valeur_future_abs = abs(valeur_future)
+    
     # npf.rate(nper, pmt, pv, fv)
+    # nper: nombre de périodes
+    # pmt: paiement par période (0)
+    # pv: valeur présente (négative car sortie)
+    # fv: valeur future (positive car entrée)
     taux = npf.rate(
         nper=duree_annees,
         pmt=0,
-        pv=-capital_initial,
-        fv=valeur_future
+        pv=-capital_abs,
+        fv=valeur_future_abs
     )
     
     return (
         f"Taux d'intérêt requis: {taux*100:.4f}% par an\n"
-        f"Capital initial: {capital_initial:,.2f}€\n"
-        f"Valeur future souhaitée: {valeur_future:,.2f}€\n"
+        f"Capital initial: {capital_abs:,.2f}€\n"
+        f"Valeur future souhaitée: {valeur_future_abs:,.2f}€\n"
         f"Durée: {duree_annees} ans"
     )
 
 
-# Agent avec outils améliorés
-finance_calculator_agent = Agent(
+# Agent 2: Financial calculations with tools
+agent_2 = Agent(
     finance_model,
-    model_settings=ModelSettings(max_tokens=2000),
+    model_settings=ModelSettings(max_output_tokens=1500),
     system_prompt=(
         "Vous êtes un conseiller financier expert avec accès à des outils de calcul financier précis.\n\n"
         "RÈGLES CRITIQUES:\n"
@@ -235,7 +267,7 @@ finance_calculator_agent = Agent(
         "6. Pour calculer un taux requis → utilisez calculer_taux_interet\n"
         "7. Pour analyser une performance → utilisez calculer_performance_portfolio\n\n"
         "N'expliquez pas comment calculer - UTILISEZ LES OUTILS directement.\n"
-        "Répondez en français de manière claire et structurée après avoir utilisé les outils."
+        "Répondez avec un objet FinancialCalculationResult structuré incluant le type de calcul, le résultat, les paramètres utilisés, et une explication."
     ),
     tools=[
         calculer_valeur_future,
@@ -244,12 +276,13 @@ finance_calculator_agent = Agent(
         calculer_valeur_actuelle,
         calculer_taux_interet,
     ],
+    output_type=FinancialCalculationResult,
 )
 
 
 async def exemple_agent_avec_outils():
     """Exemple d'utilisation d'un agent avec outils financiers."""
-    print("\n🔧 Agent 2: Agent avec outils financiers (numpy-financial)")
+    print("\n🔧 Agent 2: Financial Calculations with Tools (numpy-financial)")
     print("=" * 60)
     
     question = (
@@ -260,7 +293,7 @@ async def exemple_agent_avec_outils():
     
     print(f"Question:\n{question}\n")
     
-    result = await finance_calculator_agent.run(question)
+    result = await agent_2.run(question)
     
     print("✅ Réponse de l'agent avec calculs précis:")
     print(result.output)
@@ -350,14 +383,14 @@ async def exemple_calculs_avances():
     # Exemple 1: Valeur actuelle
     print("\n1. Calcul de valeur actuelle:")
     question1 = "Quelle est la valeur actuelle de 100 000€ dans 15 ans avec un taux d'actualisation de 3%?"
-    result1 = await finance_calculator_agent.run(question1)
+    result1 = await agent_2.run(question1)
     print(f"Question: {question1}")
     print(f"Réponse: {result1.output[:300]}...")
     
     # Exemple 2: Taux requis
     print("\n2. Calcul de taux requis:")
     question2 = "J'ai 25 000€ aujourd'hui et je veux avoir 50 000€ dans 8 ans. Quel taux d'intérêt me faut-il?"
-    result2 = await finance_calculator_agent.run(question2)
+    result2 = await agent_2.run(question2)
     print(f"Question: {question2}")
     print(f"Réponse: {result2.output[:300]}...")
 

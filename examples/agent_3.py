@@ -545,7 +545,7 @@ async def test_tool_calling():
 
 
 if __name__ == "__main__":
-    # À lancer avec: python -m examples.agent_3_multi_step
+    # Run with: python examples/agent_3.py
     print("Exécution du workflow multi-étapes...")
     asyncio.run(workflow_analyse_investissement())
     

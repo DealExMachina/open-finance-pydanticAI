@@ -1,11 +1,11 @@
 """
-Agent 2 Compliance: Wrapper that executes agent_2 (financial calculator) and runs compliance checks.
+Agent 4 Compliance: Wrapper that executes agent_4 (option pricing) and runs compliance checks.
 
 Optimizations:
-- Uses optimized agent_2 with structured tool returns
-- Optimized tool signatures (normalized inputs)
+- Uses optimized agent_4 with QuantLib tools
+- Optimized tool signatures
 - Concise compliance agent prompt
-- Better tool call detection
+- Verifies correct QuantLib tool usage
 """
 
 import asyncio
@@ -18,13 +18,13 @@ from pydantic_ai import Agent, ModelSettings
 from app.models import finance_model
 from app.mitigation_strategies import ToolCallDetector
 
-# Import optimized agent_2
-from examples.agent_2 import agent_2
+# Import optimized agent_4
+from examples.agent_4 import agent_4
 
 
-async def run_finance_agent(question: str):
-    """Execute the financial agent and return (result, tool_calls_log)."""
-    result = await agent_2.run(question)
+async def run_option_pricing_agent(question: str):
+    """Execute the option pricing agent and return (result, tool_calls_log)."""
+    result = await agent_4.run(question)
     
     # Use ToolCallDetector for better extraction
     tool_calls = ToolCallDetector.extract_tool_calls(result) or []
@@ -41,30 +41,31 @@ async def run_finance_agent(question: str):
 
 
 # ============================================================================
-# OPTIMIZED COMPLIANCE AGENT
+# OPTIMIZED COMPLIANCE AGENT FOR OPTION PRICING
 # ============================================================================
 
 compliance_agent = Agent(
     finance_model,
-    model_settings=ModelSettings(max_output_tokens=400),  # Reduced from 600
+    model_settings=ModelSettings(max_output_tokens=400),
     system_prompt=(
-        "Contrôleur compliance pour calculs financiers.\n"
+        "Contrôleur compliance pour pricing d'options avec QuantLib.\n"
         "Règles:\n"
-        "1. Liste d'outils vide → Non conforme\n"
-        "2. Outils utilisés → Conforme, mentionner lesquels\n"
-        "3. Calcul mentionné sans outil → Flag potential issue\n"
+        "1. Liste d'outils vide → Non conforme (calculs manuels interdits)\n"
+        "2. calculer_prix_call_black_scholes utilisé → Conforme\n"
+        "3. Autre outil ou calcul mentionné sans outil → Non conforme\n"
+        "4. Vérifier que tous paramètres (spot, strike, maturité, taux, volatilité) sont présents\n"
         "Réponse: 'Conforme' ou 'Non conforme' + justification courte."
-    ),  # 78 tokens vs 120 tokens (35% reduction)
+    ),  # 95 tokens - slightly longer due to QuantLib specificity
 )
 
 
 async def run_with_compliance(question: str) -> Tuple[str, List[str], str]:
-    """Run financial agent with compliance check.
+    """Run option pricing agent with compliance check.
     
     Returns:
         (agent_response, tool_calls, compliance_verdict)
     """
-    result, tool_calls = await run_finance_agent(question)
+    result, tool_calls = await run_option_pricing_agent(question)
     
     compliance_input = (
         f"QUESTION CLIENT:\n{question}\n\n"
@@ -79,18 +80,34 @@ async def run_with_compliance(question: str) -> Tuple[str, List[str], str]:
 
 
 async def exemple_compliance_check():
-    """Example of compliance checking."""
-    print("📊 Agent 2 Compliance: Financial Calculations with Compliance Check")
+    """Example of compliance checking for option pricing."""
+    print("📊 Agent 4 Compliance: Option Pricing with Compliance Check")
     print("=" * 70)
     
     questions = [
-        "J'ai 25 000€ à 4% pendant 8 ans. Combien aurai-je?",
-        "J'emprunte 150 000€ sur 15 ans à 2.8%. Quel est le versement mensuel?",
+        (
+            "Calcule le prix d'un call européen:\n"
+            "- Spot: 100\n"
+            "- Strike: 105\n"
+            "- Maturité: 0.5 an\n"
+            "- Taux sans risque: 0.02\n"
+            "- Volatilité: 0.25\n"
+            "- Dividende: 0.01"
+        ),
+        (
+            "Prix d'un call avec:\n"
+            "- Spot: 50\n"
+            "- Strike: 55\n"
+            "- Maturité: 1 an\n"
+            "- Taux: 3%\n"
+            "- Volatilité: 20%"
+        ),
     ]
     
     for i, question in enumerate(questions, 1):
         print(f"\n{'='*70}")
-        print(f"Question {i}: {question}")
+        print(f"Question {i}:")
+        print(question)
         print("="*70)
         
         try:
@@ -107,7 +124,14 @@ async def exemple_compliance_check():
                 for tc in tool_calls:
                     print(f"  - {tc}")
             else:
-                print("  ⚠️ Aucun (non conforme)")
+                print("  ⚠️ Aucun (non conforme - calculs manuels interdits)")
+            
+            # Check if correct tool was used
+            correct_tool_used = any(
+                "calculer_prix_call_black_scholes" in tc for tc in tool_calls
+            )
+            if tool_calls and not correct_tool_used:
+                print("  ⚠️ Outil incorrect utilisé")
             
             print(f"\n🔍 Avis Compliance:")
             print(f"{compliance}")
@@ -129,3 +153,5 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
+

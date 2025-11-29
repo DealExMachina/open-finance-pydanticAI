@@ -25,11 +25,22 @@ from app.mitigation_strategies import (
 )
 
 # Import des outils existants
-from examples.agent_2_tools import (
-    calculer_valeur_future,
-    calculer_versement_mensuel,
-    calculer_performance_portfolio,
-)
+try:
+    from examples.agent_2 import (
+        calculer_valeur_future,
+        calculer_versement_mensuel,
+        calculer_performance_portfolio,
+    )
+except ImportError:
+    # Fallback for direct execution
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).parent.parent))
+    from examples.agent_2 import (
+        calculer_valeur_future,
+        calculer_versement_mensuel,
+        calculer_performance_portfolio,
+    )
 
 
 # ============================================================================
@@ -96,10 +107,13 @@ async def exemple_1_tool_call_validation():
         print(f"❌ Erreurs: {', '.join(errors)}")
     
     # Vérifier les tool calls
-    tool_calls = ToolCallDetector.extract_tool_calls(result)
+    tool_calls = ToolCallDetector.extract_tool_calls(result) or []
     print(f"\n📊 Tool calls détectés: {len(tool_calls)}")
-    for i, tc in enumerate(tool_calls, 1):
-        print(f"  {i}. {tc['name']} avec args: {tc['args']}")
+    if tool_calls:
+        for i, tc in enumerate(tool_calls, 1):
+            print(f"  {i}. {tc['name']} avec args: {tc['args']}")
+    else:
+        print("  ⚠️ Aucun tool call détecté")
     
     print(f"\n📝 Réponse:\n{result.output}\n")
 
@@ -190,8 +204,11 @@ async def exemple_3_retry_with_fallback():
     print(f"✅ Succès: {success}")
     
     # Vérifier les tool calls
-    tool_calls = ToolCallDetector.extract_tool_calls(result)
+    tool_calls = ToolCallDetector.extract_tool_calls(result) or []
     print(f"📊 Tool calls détectés: {len(tool_calls)}")
+    if tool_calls:
+        for i, tc in enumerate(tool_calls, 1):
+            print(f"  {i}. {tc.get('name', 'unknown')}")
     
     print(f"\n📝 Réponse:\n{result.output}\n")
 
