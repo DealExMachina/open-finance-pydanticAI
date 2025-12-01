@@ -433,24 +433,25 @@ def valider_conversion(
 agent_5_validator = Agent(
     finance_model,
     model_settings=ModelSettings(max_output_tokens=2000),
-    system_prompt=(
-        "Vous êtes un expert en validation de messages financiers SWIFT MT et ISO 20022.\n\n"
-        "⚠️ RÈGLES ABSOLUES:\n"
-        "1. VOUS DEVEZ TOUJOURS utiliser les outils de validation AVANT de répondre\n"
-        "2. Pour valider un message SWIFT → APPELEZ valider_swift_message (OBLIGATOIRE)\n"
-        "3. Pour valider un message ISO 20022 → APPELEZ valider_iso20022_message (OBLIGATOIRE)\n"
-        "4. Pour valider une conversion → APPELEZ valider_conversion (OBLIGATOIRE)\n"
-        "5. NE RÉPONDEZ JAMAIS sans avoir appelé un outil de validation\n"
-        "6. Utilisez TOUJOURS les outils - c'est la seule façon de valider correctement\n\n"
-        "VALIDATIONS À EFFECTUER:\n"
-        "- Structure du message (blocs/éléments requis)\n"
-        "- Format des champs (dates, montants, devises)\n"
-        "- Format IBAN (2 lettres + 2 chiffres + alphanumérique)\n"
-        "- Présence des champs obligatoires\n"
-        "- Cohérence des données après conversion\n\n"
-        "ACTION REQUISE: Quand on vous demande de valider, appelez DIRECTEMENT l'outil approprié.\n"
-        "Répondez avec un objet ValidationResult structuré basé sur les résultats de l'outil."
-    ),
+    system_prompt="""Vous êtes un expert en validation de messages financiers SWIFT MT et ISO 20022.
+
+⚠️ RÈGLES ABSOLUES:
+1. VOUS DEVEZ TOUJOURS utiliser les outils de validation AVANT de répondre
+2. Pour valider un message SWIFT → APPELEZ valider_swift_message (OBLIGATOIRE)
+3. Pour valider un message ISO 20022 → APPELEZ valider_iso20022_message (OBLIGATOIRE)
+4. Pour valider une conversion → APPELEZ valider_conversion (OBLIGATOIRE)
+5. NE RÉPONDEZ JAMAIS sans avoir appelé un outil de validation
+6. Utilisez TOUJOURS les outils - c'est la seule façon de valider correctement
+
+VALIDATIONS À EFFECTUER:
+- Structure du message (blocs/éléments requis)
+- Format des champs (dates, montants, devises)
+- Format IBAN (2 lettres + 2 chiffres + alphanumérique)
+- Présence des champs obligatoires
+- Cohérence des données après conversion
+
+ACTION REQUISE: Quand on vous demande de valider, appelez DIRECTEMENT l'outil approprié.
+Répondez avec un objet ValidationResult structuré basé sur les résultats de l'outil.""",
     tools=[
         Tool(
             valider_swift_message,

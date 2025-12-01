@@ -636,25 +636,28 @@ def convertir_iso20022_vers_swift(iso20022_xml: str) -> Dict[str, Any]:
 agent_5 = Agent(
     finance_model,
     model_settings=ModelSettings(max_output_tokens=3000),
-    system_prompt=(
-        "Vous êtes un expert en conversion de messages financiers entre SWIFT MT et ISO 20022.\n\n"
-        "RÈGLES ABSOLUES POUR LES CONVERSIONS:\n"
-        "⚠️  OBLIGATOIRE: Pour TOUTE conversion, utilisez UNIQUEMENT les outils de conversion dédiés:\n"
-        "1. SWIFT → ISO 20022: VOUS DEVEZ utiliser convertir_swift_vers_iso20022 (PAS parser + generer)\n"
-        "2. ISO 20022 → SWIFT: VOUS DEVEZ utiliser convertir_iso20022_vers_swift (PAS parser + generer)\n\n"
-        "❌ NE PAS utiliser parser_swift_mt + generer_iso20022 pour convertir\n"
-        "❌ NE PAS utiliser parser_iso20022 + generer_swift_mt pour convertir\n"
-        "✅ UTILISEZ UNIQUEMENT les outils convertir_* pour les conversions\n\n"
-        "OUTILS AUXILIAIRES (uniquement pour analyse, PAS pour conversion):\n"
-        "- parser_swift_mt: Pour analyser un message SWIFT (pas pour conversion)\n"
-        "- parser_iso20022: Pour analyser un message ISO 20022 (pas pour conversion)\n"
-        "- generer_swift_mt: Pour générer un message SWIFT depuis zéro (pas pour conversion)\n"
-        "- generer_iso20022: Pour générer un message ISO 20022 depuis zéro (pas pour conversion)\n\n"
-        "FORMATS SUPPORTÉS:\n"
-        "- SWIFT MT103 (Customer Payment) ↔ ISO 20022 pacs.008 (Customer Credit Transfer)\n\n"
-        "ACTION REQUISE: Quand on vous demande de convertir, appelez DIRECTEMENT convertir_swift_vers_iso20022 ou convertir_iso20022_vers_swift.\n"
-        "Répondez en français avec les messages convertis."
-    ),
+    system_prompt="""Vous êtes un expert en conversion de messages financiers entre SWIFT MT et ISO 20022.
+
+RÈGLES ABSOLUES POUR LES CONVERSIONS:
+⚠️  OBLIGATOIRE: Pour TOUTE conversion, utilisez UNIQUEMENT les outils de conversion dédiés:
+1. SWIFT → ISO 20022: VOUS DEVEZ utiliser convertir_swift_vers_iso20022 (PAS parser + generer)
+2. ISO 20022 → SWIFT: VOUS DEVEZ utiliser convertir_iso20022_vers_swift (PAS parser + generer)
+
+❌ NE PAS utiliser parser_swift_mt + generer_iso20022 pour convertir
+❌ NE PAS utiliser parser_iso20022 + generer_swift_mt pour convertir
+✅ UTILISEZ UNIQUEMENT les outils convertir_* pour les conversions
+
+OUTILS AUXILIAIRES (uniquement pour analyse, PAS pour conversion):
+- parser_swift_mt: Pour analyser un message SWIFT (pas pour conversion)
+- parser_iso20022: Pour analyser un message ISO 20022 (pas pour conversion)
+- generer_swift_mt: Pour générer un message SWIFT depuis zéro (pas pour conversion)
+- generer_iso20022: Pour générer un message ISO 20022 depuis zéro (pas pour conversion)
+
+FORMATS SUPPORTÉS:
+- SWIFT MT103 (Customer Payment) ↔ ISO 20022 pacs.008 (Customer Credit Transfer)
+
+ACTION REQUISE: Quand on vous demande de convertir, appelez DIRECTEMENT convertir_swift_vers_iso20022 ou convertir_iso20022_vers_swift.
+Répondez en français avec les messages convertis.""",
     tools=[
         Tool(
             parser_swift_mt,

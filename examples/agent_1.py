@@ -40,12 +40,10 @@ class Portfolio(BaseModel):
 agent_1 = Agent(
     finance_model,
     model_settings=ModelSettings(max_output_tokens=600),
-    system_prompt=(
-        "Expert analyse financière. Extrais données portfolios boursiers.\n"
-        "Règles: Identifie symbole, quantité, prix_achat, date_achat pour chaque position.\n"
-        "Calcule valeur_totale = somme(quantité × prix_achat).\n"
-        "Répondez avec un objet Portfolio structuré."
-    ),
+    system_prompt="""Expert analyse financière. Extrais données portfolios boursiers.
+Règles: Identifie symbole, quantité, prix_achat, date_achat pour chaque position.
+Calcule valeur_totale = somme(quantité × prix_achat).
+Répondez avec un objet Portfolio structuré.""",
     output_type=Portfolio,
 )
 

@@ -256,19 +256,19 @@ def calculer_taux_interet(
 agent_2 = Agent(
     finance_model,
     model_settings=ModelSettings(max_output_tokens=1500),
-    system_prompt=(
-        "Vous êtes un conseiller financier expert avec accès à des outils de calcul financier précis.\n\n"
-        "RÈGLES CRITIQUES:\n"
-        "1. VOUS DEVEZ TOUJOURS utiliser les outils disponibles pour TOUS les calculs financiers\n"
-        "2. NE CALCULEZ JAMAIS manuellement - utilisez TOUJOURS les outils\n"
-        "3. Pour calculer une valeur future → utilisez calculer_valeur_future\n"
-        "4. Pour calculer un versement mensuel → utilisez calculer_versement_mensuel\n"
-        "5. Pour calculer une valeur actuelle → utilisez calculer_valeur_actuelle\n"
-        "6. Pour calculer un taux requis → utilisez calculer_taux_interet\n"
-        "7. Pour analyser une performance → utilisez calculer_performance_portfolio\n\n"
-        "N'expliquez pas comment calculer - UTILISEZ LES OUTILS directement.\n"
-        "Répondez avec un objet FinancialCalculationResult structuré incluant le type de calcul, le résultat, les paramètres utilisés, et une explication."
-    ),
+    system_prompt="""Vous êtes un conseiller financier expert avec accès à des outils de calcul financier précis.
+
+RÈGLES CRITIQUES:
+1. VOUS DEVEZ TOUJOURS utiliser les outils disponibles pour TOUS les calculs financiers
+2. NE CALCULEZ JAMAIS manuellement - utilisez TOUJOURS les outils
+3. Pour calculer une valeur future → utilisez calculer_valeur_future
+4. Pour calculer un versement mensuel → utilisez calculer_versement_mensuel
+5. Pour calculer une valeur actuelle → utilisez calculer_valeur_actuelle
+6. Pour calculer un taux requis → utilisez calculer_taux_interet
+7. Pour analyser une performance → utilisez calculer_performance_portfolio
+
+N'expliquez pas comment calculer - UTILISEZ LES OUTILS directement.
+Répondez avec un objet FinancialCalculationResult structuré incluant le type de calcul, le résultat, les paramètres utilisés, et une explication.""",
     tools=[
         calculer_valeur_future,
         calculer_versement_mensuel,

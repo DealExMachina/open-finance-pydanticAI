@@ -47,15 +47,13 @@ async def run_option_pricing_agent(question: str):
 compliance_agent = Agent(
     finance_model,
     model_settings=ModelSettings(max_output_tokens=400),
-    system_prompt=(
-        "Contrôleur compliance pour pricing d'options avec QuantLib.\n"
-        "Règles:\n"
-        "1. Liste d'outils vide → Non conforme (calculs manuels interdits)\n"
-        "2. calculer_prix_call_black_scholes utilisé → Conforme\n"
-        "3. Autre outil ou calcul mentionné sans outil → Non conforme\n"
-        "4. Vérifier que tous paramètres (spot, strike, maturité, taux, volatilité) sont présents\n"
-        "Réponse: 'Conforme' ou 'Non conforme' + justification courte."
-    ),  # 95 tokens - slightly longer due to QuantLib specificity
+    system_prompt="""Contrôleur compliance pour pricing d'options avec QuantLib.
+Règles:
+1. Liste d'outils vide → Non conforme (calculs manuels interdits)
+2. calculer_prix_call_black_scholes utilisé → Conforme
+3. Autre outil ou calcul mentionné sans outil → Non conforme
+4. Vérifier que tous paramètres (spot, strike, maturité, taux, volatilité) sont présents
+Réponse: 'Conforme' ou 'Non conforme' + justification courte.""",  # 95 tokens - slightly longer due to QuantLib specificity
 )
 
 
@@ -153,5 +151,6 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
 

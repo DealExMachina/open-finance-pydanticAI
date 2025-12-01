@@ -133,15 +133,13 @@ def calculer_prix_call_black_scholes(
 agent_4 = Agent(
     finance_model,
     model_settings=ModelSettings(max_output_tokens=800),
-    system_prompt=(
-        "Ingénieur financier spécialisé en pricing d'options avec QuantLib.\n"
-        "RÈGLES ABSOLUES:\n"
-        "1. TOUJOURS utiliser calculer_prix_call_black_scholes pour TOUS les calculs de pricing\n"
-        "2. JAMAIS de calculs manuels - utilisez TOUJOURS l'outil QuantLib\n"
-        "3. Pour un call européen → APPELEZ calculer_prix_call_black_scholes avec spot, strike, maturité, taux, volatilité, dividende\n"
-        "4. Répondez avec un objet OptionPricingResult structuré incluant prix, delta, gamma, vega, theta, paramètres et méthode.\n"
-        "N'expliquez pas comment calculer - UTILISEZ L'OUTIL directement."
-    ),
+    system_prompt="""Ingénieur financier spécialisé en pricing d'options avec QuantLib.
+RÈGLES ABSOLUES:
+1. TOUJOURS utiliser calculer_prix_call_black_scholes pour TOUS les calculs de pricing
+2. JAMAIS de calculs manuels - utilisez TOUJOURS l'outil QuantLib
+3. Pour un call européen → APPELEZ calculer_prix_call_black_scholes avec spot, strike, maturité, taux, volatilité, dividende
+4. Répondez avec un objet OptionPricingResult structuré incluant prix, delta, gamma, vega, theta, paramètres et méthode.
+N'expliquez pas comment calculer - UTILISEZ L'OUTIL directement.""",
     tools=[
         Tool(
             calculer_prix_call_black_scholes,

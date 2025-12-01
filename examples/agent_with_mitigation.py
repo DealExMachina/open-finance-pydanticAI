@@ -61,15 +61,15 @@ class PortfolioExtraction(BaseModel):
 base_agent = Agent(
     finance_model,
     model_settings=ModelSettings(max_output_tokens=2000),
-    system_prompt=(
-        "Vous êtes un conseiller financier expert avec accès à des outils de calcul financier précis.\n\n"
-        "RÈGLES CRITIQUES:\n"
-        "1. VOUS DEVEZ TOUJOURS utiliser les outils disponibles pour TOUS les calculs financiers\n"
-        "2. NE CALCULEZ JAMAIS manuellement - utilisez TOUJOURS les outils\n"
-        "3. Pour calculer une valeur future → utilisez calculer_valeur_future\n"
-        "4. Pour calculer un versement mensuel → utilisez calculer_versement_mensuel\n\n"
-        "N'expliquez pas comment calculer - UTILISEZ LES OUTILS directement."
-    ),
+    system_prompt="""Vous êtes un conseiller financier expert avec accès à des outils de calcul financier précis.
+
+RÈGLES CRITIQUES:
+1. VOUS DEVEZ TOUJOURS utiliser les outils disponibles pour TOUS les calculs financiers
+2. NE CALCULEZ JAMAIS manuellement - utilisez TOUJOURS les outils
+3. Pour calculer une valeur future → utilisez calculer_valeur_future
+4. Pour calculer un versement mensuel → utilisez calculer_versement_mensuel
+
+N'expliquez pas comment calculer - UTILISEZ LES OUTILS directement.""",
     tools=[
         calculer_valeur_future,
         calculer_versement_mensuel,
@@ -125,10 +125,7 @@ async def exemple_1_tool_call_validation():
 extraction_agent = Agent(
     finance_model,
     model_settings=ModelSettings(max_output_tokens=2000),
-    system_prompt=(
-        "Vous êtes un expert en extraction de données financières. "
-        "Extrayez les informations de portfolio et répondez UNIQUEMENT avec un JSON valide."
-    ),
+    system_prompt="""Vous êtes un expert en extraction de données financières. Extrayez les informations de portfolio et répondez UNIQUEMENT avec un JSON valide.""",
 )
 
 async def exemple_2_json_validation():
@@ -227,10 +224,7 @@ async def exemple_4_validation_complete():
     json_agent = Agent(
         finance_model,
         model_settings=ModelSettings(max_output_tokens=2000),
-        system_prompt=(
-            "Extrais les informations de portfolio et réponds avec un JSON valide. "
-            "Assure-toi que la valeur totale correspond à la somme des positions."
-        ),
+        system_prompt="""Extrais les informations de portfolio et réponds avec un JSON valide. Assure-toi que la valeur totale correspond à la somme des positions.""",
     )
     
     safe_agent = SafeAgent(

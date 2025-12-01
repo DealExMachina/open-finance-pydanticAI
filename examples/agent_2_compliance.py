@@ -47,14 +47,12 @@ async def run_finance_agent(question: str):
 compliance_agent = Agent(
     finance_model,
     model_settings=ModelSettings(max_output_tokens=400),  # Reduced from 600
-    system_prompt=(
-        "Contrôleur compliance pour calculs financiers.\n"
-        "Règles:\n"
-        "1. Liste d'outils vide → Non conforme\n"
-        "2. Outils utilisés → Conforme, mentionner lesquels\n"
-        "3. Calcul mentionné sans outil → Flag potential issue\n"
-        "Réponse: 'Conforme' ou 'Non conforme' + justification courte."
-    ),  # 78 tokens vs 120 tokens (35% reduction)
+    system_prompt="""Contrôleur compliance pour calculs financiers.
+Règles:
+1. Liste d'outils vide → Non conforme
+2. Outils utilisés → Conforme, mentionner lesquels
+3. Calcul mentionné sans outil → Flag potential issue
+Réponse: 'Conforme' ou 'Non conforme' + justification courte.""",  # 78 tokens vs 120 tokens (35% reduction)
 )
 
 
