@@ -3,18 +3,34 @@
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
 
-from app.config import settings, ENDPOINTS
+from app.config import settings, ENDPOINTS, get_best_available_endpoint
 
 # Create PydanticAI model using OpenAI-compatible endpoint
 # Supports both Koyeb (vLLM) and HF Space (Transformers) backends
-# Configure via ENDPOINT env var: "koyeb" (default), "hf", or "llm_pro_finance"
-finance_model = OpenAIChatModel(
-    model_name=settings.model_name,
-    provider=OpenAIProvider(
-        base_url=f"{settings.base_url}/v1",
-        api_key=settings.api_key,
-    ),
-)
+# Automatically prefers Koyeb when available, falls back to HF
+def get_finance_model():
+    """Get finance model using the best available endpoint (prefers Koyeb)."""
+    # Get the best available endpoint (prefers Koyeb)
+    endpoint = get_best_available_endpoint()
+    endpoint_config = ENDPOINTS.get(endpoint, ENDPOINTS["koyeb"])
+    
+    return OpenAIChatModel(
+        model_name=endpoint_config["model"],
+        provider=OpenAIProvider(
+            base_url=f"{endpoint_config['url']}/v1",
+            api_key=settings.api_key,
+        ),
+    )
+
+# Create a function that returns the finance model using the best available endpoint
+# This ensures we always prefer Koyeb when available
+def get_finance_model_dynamic():
+    """Get finance model using the best available endpoint (prefers Koyeb)."""
+    return get_finance_model()
+
+# For backward compatibility, create a default instance
+# But agents should ideally call get_finance_model_dynamic() for fresh models
+finance_model = get_finance_model()
 
 # Judge agent model using Llama 70B (LLM Pro Finance)
 # Uses LLM_PRO_FINANCE_KEY from .env if available
@@ -23,11 +39,15 @@ def get_judge_model():
     """Get judge model - uses LLM Pro Finance if key available, otherwise uses finance_model."""
     if settings.llm_pro_finance_key:
         # Use Llama 70B via LLM Pro Finance
+        base_url = settings.judge_base_url
+        # LLM Pro Finance uses /api (not /api/v1)
+        api_path = ENDPOINTS.get("llm_pro_finance", {}).get("api_path", "/api")
+        
         return OpenAIChatModel(
-            model_name=ENDPOINTS.get("llm_pro_finance", {}).get("model", "llama-70b-finance"),
+            model_name=ENDPOINTS.get("llm_pro_finance", {}).get("model", "DragonLLM/llama3.1-70b-fin-v1.0-fp8"),
             provider=OpenAIProvider(
-                base_url=f"{settings.judge_base_url}/v1",
-                api_key=settings.llm_pro_finance_key,
+                base_url=f"{base_url}{api_path}",
+                api_key=settings.llm_pro_finance_key if settings.llm_pro_finance_key else "not-needed",
             ),
         )
     else:
