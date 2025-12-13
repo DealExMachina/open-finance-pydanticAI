@@ -20,6 +20,11 @@ ENDPOINTS = {
         "model": "DragonLLM/llama3.1-70b-fin-v1.0-fp8",  # Fine-tuned Llama 70B for finance
         "api_path": "/api",  # LLM Pro Finance uses /api instead of /api/v1
     },
+    "ollama": {
+        "url": "http://localhost:11434",
+        "model": "",  # Will use OLLAMA_MODEL environment variable
+        "api_path": "/v1",  # Ollama's OpenAI-compatible endpoint
+    },
 }
 
 
@@ -35,7 +40,7 @@ def strip_quotes(value: str) -> str:
 class Settings(BaseSettings):
     """Application settings."""
     
-    # Endpoint selection: "koyeb", "hf", or "llm_pro_finance"
+    # Endpoint selection: "koyeb", "hf", "llm_pro_finance", or "ollama"
     endpoint: str = "koyeb"
     
     @property
@@ -46,6 +51,8 @@ class Settings(BaseSettings):
     @property
     def model_name(self) -> str:
         """Get the model name for the selected endpoint."""
+        if self.endpoint == "ollama":
+            return self.ollama_model if self.ollama_model else ""
         return ENDPOINTS.get(self.endpoint, ENDPOINTS["koyeb"])["model"]
     
     # Legacy alias for compatibility
@@ -62,8 +69,11 @@ class Settings(BaseSettings):
     # LLM Pro Finance API URL (optional, defaults to ENDPOINTS config)
     llm_pro_finance_url: str = ""
     
+    # Ollama local model configuration
+    ollama_model: str = ""  # Model name to use (e.g., "dragon-llm", "qwen2.5:7b")
+    
     # Validators to strip quotes from env values
-    @field_validator('llm_pro_finance_key', 'llm_pro_finance_url', 'api_key', mode='before')
+    @field_validator('llm_pro_finance_key', 'llm_pro_finance_url', 'api_key', 'ollama_model', mode='before')
     @classmethod
     def strip_quotes_from_value(cls, v):
         if isinstance(v, str):
