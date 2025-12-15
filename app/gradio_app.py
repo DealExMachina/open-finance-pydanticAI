@@ -980,7 +980,16 @@ CALCUL CRITIQUE: Calculez valeur_totale en additionnant TOUS les produits (quant
 Formule: valeur_totale = Σ(quantité × prix_achat) pour toutes les positions.
 Vérifiez que vous additionnez bien TOUTES les positions avant de donner la valeur totale.
 
-IMPORTANT: Répondez UNIQUEMENT en format JSON valide, sans texte supplémentaire, sans markdown, sans code blocks. Le JSON doit correspondre exactement au schéma Portfolio avec les champs: positions (liste d'objets avec symbole, quantite, prix_achat, date_achat), valeur_totale (nombre), date_evaluation (string au format YYYY-MM-DD). Chaque position doit avoir: symbole (string), quantite (integer), prix_achat (float), date_achat (string YYYY-MM-DD)."""
+IMPORTANT: Répondez UNIQUEMENT en format JSON valide, sans texte supplémentaire, sans markdown, sans code blocks. 
+Le JSON doit être exactement:
+{
+  "positions": [
+    {"symbole": "AIR.PA", "quantite": 50, "prix_achat": 120.0, "date_achat": "2024-03-15"}
+  ],
+  "valeur_totale": 8550.0,
+  "date_evaluation": "2024-11-01"
+}
+Chaque position DOIT avoir date_achat au format YYYY-MM-DD (utilisez une date raisonnable si non spécifiée)."""
         max_tokens = 1000  # Ollama needs more tokens
     else:
         system_prompt = """Expert analyse financière. Extrais données portfolios boursiers.
@@ -1059,7 +1068,17 @@ def run_agent_2(prompt: str, endpoint: str = "koyeb"):
             # Adjust retries and tokens for Ollama
             retries = 2 if endpoint == "ollama" else 0
             max_tokens = 400 if endpoint == "ollama" else 200
-            system_prompt = "Calc. 1x outil. JSON. Répondez UNIQUEMENT en JSON valide, sans markdown, sans code blocks." if endpoint == "ollama" else "Calc. 1x outil. JSON."
+            if endpoint == "ollama":
+                system_prompt = """Calc. 1x outil. JSON. Répondez UNIQUEMENT en JSON valide, sans markdown, sans code blocks.
+Le JSON doit être exactement:
+{
+  "calculation_type": "valeur_future_composee",
+  "result": 74012.21,
+  "input_parameters": {"capital_initial": 50000, "taux_interet_annuel": 0.04, "periode_annees": 10},
+  "explanation": "Explication du calcul"
+}"""
+            else:
+                system_prompt = "Calc. 1x outil. JSON."
             
             agent = Agent(
                 model,
