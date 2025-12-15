@@ -78,6 +78,9 @@ MAX_TOKENS=1500
 # Optional: Llama 70B for Judge Agent
 LLM_PRO_FINANCE_KEY=your-api-key-here
 LLM_PRO_FINANCE_URL=https://api.llm-pro-finance.com
+
+# Optional: Ollama local endpoint (for locally imported models)
+OLLAMA_MODEL=dragon-llm  # Use exact model name from `ollama list` (e.g., "dragon-llm" or "dragon-llm:latest")
 ```
 
 ### Start Gradio App
@@ -116,9 +119,71 @@ Results saved to `examples/evaluate_all_agents_results.json` with token usage, t
 Requires a running model instance. Deploy `DragonLLM/Qwen-Open-Finance-R-8B` on:
 - **Koyeb** (recommended) - vLLM backend
 - **Hugging Face Spaces** - TGI backend
+- **Ollama** (local) - For local quantized models
 - Any OpenAI-compatible API endpoint
 
 See [simple-llm-pro-finance](https://github.com/DealExMachina/simple-llm-pro-finance) for deployment instructions.
+
+### Using Ollama (Local)
+
+Ollama allows you to run quantized models locally with full tool calling support. You can use locally downloaded models without pulling from the Ollama registry.
+
+**Setup**:
+
+1. Install Ollama from [ollama.ai](https://ollama.ai)
+
+2. Set up your local model:
+
+   **Option A: Import a GGUF model file**
+   ```bash
+   # Create a Modelfile pointing to your local GGUF file
+   cat > Modelfile << EOF
+   FROM /path/to/your/model.gguf
+   PARAMETER temperature 0.7
+   PARAMETER num_ctx 8192
+   EOF
+   
+   ollama create dragon-llm -f Modelfile
+   ```
+   
+   **Option B: Create from a local directory**
+   ```bash
+   # If you have model files in a directory
+   ollama create dragon-llm --file /path/to/your/Modelfile
+   ```
+   
+   **Option C: Use existing local model**
+   ```bash
+   # List available models
+   ollama list
+   # Use an existing model name
+   ```
+
+3. Verify your model is available:
+   ```bash
+   ollama list
+   # Should show your model name
+   ```
+
+4. Configure in `.env`:
+   ```env
+   OLLAMA_MODEL=dragon-llm  # Use the exact model name from `ollama list`
+   ```
+
+5. Start Ollama (usually runs automatically):
+   ```bash
+   ollama serve
+   ```
+
+6. Verify Ollama is running and model is accessible:
+   ```bash
+   curl http://localhost:11434/v1/models
+   # Should return JSON with your model listed
+   ```
+
+7. Select "Ollama" endpoint in the Gradio UI
+
+**Note**: The model name in `OLLAMA_MODEL` must exactly match the name shown in `ollama list`. If you created a model with a tag (e.g., `dragon-llm:latest`), use the full name or just the base name depending on how Ollama registered it.
 
 **Model Specifications**:
 - Model: `DragonLLM/Qwen-Open-Finance-R-8B`

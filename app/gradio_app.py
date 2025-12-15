@@ -24,6 +24,50 @@ from app.config import Settings, ENDPOINTS
 
 
 # ============================================================================
+# HELPER FUNCTIONS
+# ============================================================================
+
+def get_endpoint_from_model(model) -> str:
+    """Determine which endpoint a model is using by comparing base_url.
+    
+    Args:
+        model: PydanticAI model instance
+        
+    Returns:
+        Endpoint name ("koyeb", "hf", "llm_pro_finance", "ollama") or "unknown"
+    """
+    try:
+        if hasattr(model, 'provider') and hasattr(model.provider, 'base_url'):
+            base_url = model.provider.base_url
+            
+            # Remove /v1 or /api suffix for comparison
+            base_url_clean = base_url.rstrip('/v1').rstrip('/api').rstrip('/')
+            
+            # Compare with each endpoint's URL
+            for endpoint_name, endpoint_config in ENDPOINTS.items():
+                endpoint_url = endpoint_config.get("url", "").rstrip('/')
+                api_path = endpoint_config.get("api_path", "/v1").lstrip('/')
+                
+                # Check if base_url matches this endpoint
+                if endpoint_name == "llm_pro_finance":
+                    # LLM Pro Finance uses /api path
+                    if base_url_clean == endpoint_url or base_url == f"{endpoint_url}/api":
+                        return endpoint_name
+                elif endpoint_name == "ollama":
+                    # Ollama uses /v1 path
+                    if base_url_clean == endpoint_url or base_url == f"{endpoint_url}/v1":
+                        return endpoint_name
+                else:
+                    # Koyeb and HF use /v1 path
+                    if base_url_clean == endpoint_url or base_url == f"{endpoint_url}/v1":
+                        return endpoint_name
+    except Exception as e:
+        print(f"[WARNING] Could not determine endpoint from model: {e}")
+    
+    return "unknown"
+
+
+# ============================================================================
 # GLOBAL STATE
 # ============================================================================
 
@@ -141,6 +185,18 @@ def check_server_health(endpoint_name: str, base_url: str, timeout: float = 3.0,
                     pass
                 return False, "offline"
             
+            # Ollama uses /v1/models or /api/tags
+            if endpoint_name == "ollama":
+                urls = [f"{base_url}/v1/models", f"{base_url}/api/tags", base_url]
+                for url in urls:
+                    try:
+                        r = client.get(url, timeout=timeout)
+                        if r.status_code in [200, 401]:
+                            return True, "online"
+                    except:
+                        continue
+                return False, "offline"
+            
             # Koyeb/HF
             urls = [f"{base_url}/v1/models", f"{base_url}/health", base_url]
             sleeping_detected = False
@@ -242,6 +298,77 @@ def wake_up_koyeb_service(base_url: str) -> Tuple[bool, str]:
         return False, f"Error: {error_msg}"
 
 
+def get_available_endpoints(include_llm_pro: bool = True) -> Dict[str, bool]:
+    """Check availability of all endpoints and return status dict.
+    
+    Args:
+        include_llm_pro: Whether to check LLM Pro Finance endpoint
+        
+    Returns:
+        Dict with endpoint names as keys and availability (bool) as values.
+        Keys: "koyeb", "hf", "llm_pro_finance", "ollama"
+    """
+    settings = Settings()
+    availability = {}
+    
+    # Check Koyeb
+    koyeb_url = ENDPOINTS.get("koyeb", {}).get("url", "")
+    if koyeb_url:
+        is_online, status = check_server_health("koyeb", koyeb_url, timeout=3.0)
+        availability["koyeb"] = is_online and status == "online"
+    else:
+        availability["koyeb"] = False
+    
+    # Check HuggingFace
+    hf_url = ENDPOINTS.get("hf", {}).get("url", "")
+    if hf_url:
+        is_online, status = check_server_health("hf", hf_url, timeout=3.0)
+        availability["hf"] = is_online and status == "online"
+    else:
+        availability["hf"] = False
+    
+    # Check LLM Pro Finance (optional)
+    if include_llm_pro:
+        llm_pro_url = settings.llm_pro_finance_url or ENDPOINTS.get("llm_pro_finance", {}).get("url", "")
+        if llm_pro_url:
+            is_online, status = check_server_health("llm_pro", llm_pro_url, api_key=settings.llm_pro_finance_key, timeout=3.0)
+            availability["llm_pro_finance"] = is_online and status == "online"
+        else:
+            availability["llm_pro_finance"] = False
+    else:
+        availability["llm_pro_finance"] = False
+    
+    # Check Ollama
+    ollama_url = ENDPOINTS.get("ollama", {}).get("url", "")
+    if ollama_url and settings.ollama_model:
+        is_online, status = check_server_health("ollama", ollama_url, timeout=3.0)
+        # Also verify the model is available
+        if is_online and status == "online":
+            # Check if the configured model exists
+            try:
+                with httpx.Client(timeout=3.0) as client:
+                    r = client.get(f"{ollama_url}/api/tags")
+                    if r.status_code == 200:
+                        models_data = r.json()
+                        model_names = [model.get("name", "") for model in models_data.get("models", [])]
+                        # Check if configured model exists (exact match or starts with)
+                        model_found = any(
+                            settings.ollama_model == name or name.startswith(settings.ollama_model + ":")
+                            for name in model_names
+                        )
+                        availability["ollama"] = model_found
+                    else:
+                        availability["ollama"] = False
+            except:
+                availability["ollama"] = False
+        else:
+            availability["ollama"] = False
+    else:
+        availability["ollama"] = False
+    
+    return availability
+
+
 def get_status_html() -> str:
     """Get status indicators HTML with wake-up buttons."""
     settings = Settings()
@@ -250,6 +377,7 @@ def get_status_html() -> str:
         ("koyeb", "Koyeb", ENDPOINTS.get("koyeb", {}).get("url", ""), None),
         ("hf", "HuggingFace", ENDPOINTS.get("hf", {}).get("url", ""), None),
         ("llm_pro", "LLM Pro", settings.llm_pro_finance_url or "", settings.llm_pro_finance_key),
+        ("ollama", "Ollama", ENDPOINTS.get("ollama", {}).get("url", ""), None),
     ]
     
     html = "<div style='display: flex; gap: 20px; align-items: center; flex-wrap: wrap; font-family: system-ui;'>"
@@ -776,9 +904,26 @@ def format_metrics(elapsed: float, usage, tool_info: Dict) -> str:
 # AGENT RUNNERS
 # ============================================================================
 
-def run_agent_1(prompt: str):
-    from examples.agent_1 import agent_1, Portfolio
-    output, usage, elapsed, tool_info = execute_agent(agent_1, prompt, Portfolio, "Agent 1")
+def run_agent_1(prompt: str, endpoint: str = "koyeb"):
+    from examples.agent_1 import Portfolio
+    from pydantic_ai import Agent, ModelSettings
+    from app.models import get_model_for_endpoint
+    
+    # Create agent dynamically with selected endpoint
+    model = get_model_for_endpoint(endpoint)
+    agent = Agent(
+        model,
+        model_settings=ModelSettings(max_output_tokens=600),
+        system_prompt="""Expert analyse financière. Extrais données portfolios boursiers.
+Règles: Identifie symbole, quantité, prix_achat, date_achat pour chaque position.
+CALCUL CRITIQUE: Calculez valeur_totale en additionnant TOUS les produits (quantité × prix_achat) pour chaque position.
+Formule: valeur_totale = Σ(quantité × prix_achat) pour toutes les positions.
+Vérifiez que vous additionnez bien TOUTES les positions avant de donner la valeur totale.
+Répondez avec un objet Portfolio structuré.""",
+        output_type=Portfolio,
+    )
+    
+    output, usage, elapsed, tool_info = execute_agent(agent, prompt, Portfolio, "Agent 1")
     
     if isinstance(output, dict) and "error" in output:
         return output["error"], "", "", "Error"
@@ -788,7 +933,8 @@ def run_agent_1(prompt: str):
     if isinstance(complete_result, dict):
         complete_result["_metadata"] = {
             "tool_calls": tool_info.get("count", 0),
-            "elapsed": elapsed
+            "elapsed": elapsed,
+            "endpoint_used": endpoint
         }
     
     results_store["Agent 1"] = complete_result
@@ -797,14 +943,23 @@ def run_agent_1(prompt: str):
     return format_parsed_output(output), format_output(output), format_metrics(elapsed, usage, tool_info), f"Success ({elapsed:.2f}s)"
 
 
-def run_agent_2(prompt: str):
+def run_agent_2(prompt: str, endpoint: str = "koyeb"):
     """Run Agent 2 with automatic fallback to Llama 70B on context explosion."""
-    from examples.agent_2_wrapped import run_agent_2_wrapped, select_tool_from_question, FinancialCalculationResult
+    from examples.agent_2_wrapped import select_tool_from_question, FinancialCalculationResult
     from examples.agent_2_compliance import validate_calculation
     from app.mitigation_strategies import ToolCallDetector
+    from app.models import get_model_for_endpoint
     from pydantic_ai import Agent, ModelSettings
     from pydantic_ai.models.openai import OpenAIChatModel
     from pydantic_ai.providers.openai import OpenAIProvider
+    
+    # Check if endpoint is disabled for this agent
+    if endpoint == "llm_pro_finance":
+        return (
+            "LLM Pro Finance endpoint doesn't support tool calls yet. This feature is coming soon. "
+            "Please use Koyeb or HuggingFace endpoint for Agent 2.",
+            "", "", "Error"
+        )
     
     ready, msg = is_backend_ready("Agent 2")
     if not ready:
@@ -813,41 +968,67 @@ def run_agent_2(prompt: str):
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     fallback_used = False
+    endpoint_used = endpoint
     
     try:
         start = time.time()
-        # Try with Koyeb (Qwen 8B) first
+        # Try with selected endpoint first
         try:
-            result = loop.run_until_complete(run_agent_2_wrapped(prompt))
+            # Create agent with selected endpoint
+            model = get_model_for_endpoint(endpoint)
+            tool = select_tool_from_question(prompt)
+            agent = Agent(
+                model,
+                model_settings=ModelSettings(
+                    max_output_tokens=200,
+                    temperature=0.0,
+                ),
+                system_prompt="Calc. 1x outil. JSON.",
+                tools=[tool],
+                output_type=FinancialCalculationResult,
+                retries=0,
+            )
+            result = loop.run_until_complete(agent.run(prompt))
             elapsed = time.time() - start
-        except Exception as qwen_error:
-            error_msg = str(qwen_error)
+        except Exception as primary_error:
+            error_msg = str(primary_error)
+            # Check for tool_choice error with LLM Pro Finance
+            if endpoint == "llm_pro_finance" and ("tool_choice" in error_msg.lower() or "enable-auto-tool-choice" in error_msg.lower() or "Invalid response" in error_msg):
+                # LLM Pro Finance doesn't support tool_choice="auto" yet
+                raise ValueError(
+                    "LLM Pro Finance endpoint doesn't support tool calls yet. "
+                    "This feature is coming soon. Please use Koyeb or HuggingFace endpoint for now."
+                )
             # Check for context length error
-            if "maximum context length" in error_msg.lower() or any(tok in error_msg for tok in ["8192", "8300", "8369", "8400"]):
-                # Fallback to Llama 70B
-                fallback_used = True
-                settings = Settings()
-                llmpro_model = OpenAIChatModel(
-                    model_name=ENDPOINTS.get("llm_pro_finance", {}).get("model", "DragonLLM/llama3.1-70b-fin-v1.0-fp8"),
-                    provider=OpenAIProvider(
-                        base_url=f"{settings.llm_pro_finance_url}/api",
-                        api_key=settings.llm_pro_finance_key,
-                    ),
-                )
-                
-                tool = select_tool_from_question(prompt)
-                llama_agent = Agent(
-                    llmpro_model,
-                    model_settings=ModelSettings(max_output_tokens=300, temperature=0.0),
-                    system_prompt="Calc. 1x outil. JSON.",
-                    tools=[tool],
-                    output_type=FinancialCalculationResult,
-                    retries=0,
-                )
-                
-                start = time.time()
-                result = loop.run_until_complete(llama_agent.run(prompt))
-                elapsed = time.time() - start
+            elif "maximum context length" in error_msg.lower() or any(tok in error_msg for tok in ["8192", "8300", "8369", "8400"]):
+                # Fallback to Llama 70B (only if not already using it)
+                if endpoint != "llm_pro_finance":
+                    fallback_used = True
+                    endpoint_used = "llm_pro_finance"
+                    settings = Settings()
+                    llmpro_model = OpenAIChatModel(
+                        model_name=ENDPOINTS.get("llm_pro_finance", {}).get("model", "DragonLLM/llama3.1-70b-fin-v1.0-fp8"),
+                        provider=OpenAIProvider(
+                            base_url=f"{settings.llm_pro_finance_url}/api",
+                            api_key=settings.llm_pro_finance_key,
+                        ),
+                    )
+                    
+                    tool = select_tool_from_question(prompt)
+                    llama_agent = Agent(
+                        llmpro_model,
+                        model_settings=ModelSettings(max_output_tokens=300, temperature=0.0),
+                        system_prompt="Calc. 1x outil. JSON.",
+                        tools=[tool],
+                        output_type=FinancialCalculationResult,
+                        retries=0,
+                    )
+                    
+                    start = time.time()
+                    result = loop.run_until_complete(llama_agent.run(prompt))
+                    elapsed = time.time() - start
+                else:
+                    raise  # Already using LLM Pro, re-raise
             else:
                 raise  # Re-raise if not context error
         
@@ -914,6 +1095,7 @@ def run_agent_2(prompt: str):
                 "tool_calls": len(tool_calls_formatted),
                 "compliance": compliance_verdict,
                 "elapsed": elapsed,
+                "endpoint_used": endpoint_used,
                 "model_used": "Llama 70B" if fallback_used else "Qwen 8B",
                 "fallback": fallback_used
             }
@@ -930,12 +1112,50 @@ def run_agent_2(prompt: str):
         loop.close()
 
 
-def run_agent_3(prompt: str):
-    from examples.agent_3 import risk_analyst, tax_advisor, AnalyseRisque, AnalyseFiscale
+def run_agent_3(prompt: str, endpoint: str = "koyeb"):
+    from examples.agent_3 import (
+        calculer_rendement_portfolio, calculer_valeur_future_investissement,
+        AnalyseRisque, AnalyseFiscale
+    )
+    from pydantic_ai import Agent, ModelSettings, Tool
+    from app.models import get_model_for_endpoint
+    
+    # Check if endpoint is disabled for this agent
+    if endpoint == "llm_pro_finance":
+        return (
+            "LLM Pro Finance endpoint doesn't support tool calls yet. This feature is coming soon. "
+            "Please use Koyeb or HuggingFace endpoint for Agent 3.",
+            "", "", "Error"
+        )
     
     ready, msg = is_backend_ready("Agent 3")
     if not ready:
         return msg, "", "", "Error"
+    
+    # Create agents dynamically with selected endpoint
+    model = get_model_for_endpoint(endpoint)
+    
+    risk_analyst = Agent(
+        model,
+        model_settings=ModelSettings(max_output_tokens=1200),
+        system_prompt="""Vous êtes un analyste de risque financier. Vous évaluez les risques associés à différents instruments financiers et stratégies d'investissement.
+
+⚠️ RÈGLE ABSOLUE - UTILISATION D'OUTILS:
+AVANT TOUTE ANALYSE, vous DEVEZ OBLIGATOIREMENT appeler l'outil calculer_rendement_portfolio.
+SANS CET APPEL, votre analyse est INVALIDE. Ne faites JAMAIS d'analyse sans avoir calculé le rendement attendu.
+
+Utilisez l'outil pour calculer le rendement attendu, puis analysez les risques.""",
+        tools=[Tool(calculer_rendement_portfolio), Tool(calculer_valeur_future_investissement)],
+    )
+    
+    tax_advisor = Agent(
+        model,
+        model_settings=ModelSettings(max_output_tokens=1200),
+        system_prompt="""Vous êtes un conseiller fiscal spécialisé dans l'optimisation fiscale des investissements français.
+
+Analysez les implications fiscales des stratégies d'investissement proposées.
+Considérez les régimes fiscaux: PEA, assurance-vie, compte-titres, etc.""",
+    )
     
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
@@ -976,6 +1196,14 @@ def run_agent_3(prompt: str):
         compliance = check_agent_compliance("Agent 3", output, combined_tool_info)
         compliance_html = format_compliance_html(compliance)
         
+        # Store with metadata
+        if isinstance(output, dict):
+            output["_metadata"] = {
+                "tool_calls": combined_tool_info.get("count", 0),
+                "elapsed": elapsed,
+                "endpoint_used": endpoint
+            }
+        
         results_store["Agent 3"] = output
         metrics_html = format_metrics(elapsed, Usage(), combined_tool_info) + compliance_html
         return format_parsed_output(output), format_output(output), metrics_html, f"Success ({elapsed:.2f}s)"
@@ -985,78 +1213,82 @@ def run_agent_3(prompt: str):
         loop.close()
 
 
-def run_agent_4(prompt: str):
+def run_agent_4(prompt: str, endpoint: str = "koyeb"):
     """Run Agent 4 with compliance checking and detailed tool trace."""
-    from examples.agent_4_compliance import run_with_compliance
-    from examples.agent_4 import OptionPricingResult
+    # Check if endpoint is disabled for this agent
+    if endpoint == "llm_pro_finance":
+        return (
+            "LLM Pro Finance endpoint doesn't support tool calls yet. This feature is coming soon. "
+            "Please use Koyeb or HuggingFace endpoint for Agent 4.",
+            "", "", "Error"
+        )
+    
+    from examples.agent_4 import OptionPricingResult, calculer_prix_call_black_scholes
+    from app.mitigation_strategies import ToolCallDetector
+    from app.models import get_model_for_endpoint
+    from pydantic_ai import Agent, ModelSettings, Tool
     import time
     
     ready, msg = is_backend_ready("Agent 4")
     if not ready:
         return msg, "", "", "Error"
     
+    # Create agent dynamically with selected endpoint
+    model = get_model_for_endpoint(endpoint)
+    agent_4 = Agent(
+        model,
+        model_settings=ModelSettings(max_output_tokens=800),
+        system_prompt="""Ingénieur financier spécialisé en pricing d'options avec QuantLib.
+RÈGLES ABSOLUES:
+1. TOUJOURS utiliser calculer_prix_call_black_scholes pour TOUS les calculs de pricing
+2. JAMAIS de calculs manuels - utilisez TOUJOURS l'outil QuantLib
+3. Pour un call européen → APPELEZ calculer_prix_call_black_scholes avec spot, strike, maturité, taux, volatilité, dividende
+4. Répondez avec un objet OptionPricingResult structuré incluant prix, Greeks (delta, gamma, vega, theta), paramètres d'entrée.""",
+        tools=[Tool(calculer_prix_call_black_scholes)],
+        output_type=OptionPricingResult,
+    )
+    
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
         start = time.time()
-        response, tool_calls, compliance_verdict = loop.run_until_complete(
-            run_with_compliance(prompt)
-        )
-        elapsed = time.time() - start
+        # Run agent and extract tool calls
+        result = loop.run_until_complete(agent_4.run(prompt))
+        tool_calls = ToolCallDetector.extract_tool_calls(result) or []
         
-        # Parse the response to get structured output
-        try:
-            import json
-            # Try to extract JSON from response
-            if isinstance(response, str):
-                # Try to parse as JSON
-                try:
-                    output_data = json.loads(response)
-                    output = OptionPricingResult(**output_data)
-                except:
-                    # If not JSON, try to find JSON in the text
-                    from app.mitigation_strategies import JSONValidator
-                    json_data = JSONValidator.extract_json_from_text(response)
-                    if json_data:
-                        output = OptionPricingResult(**json_data)
-                    else:
-                        # Fallback: try to extract from the response text
-                        # OptionPricingResult has specific fields, so we'll create a minimal one
-                        output = OptionPricingResult(
-                            option_price=0.0,
-                            delta=0.0,
-                            gamma=0.0,
-                            vega=0.0,
-                            theta=0.0,
-                            input_parameters={},
-                            calculation_method="unknown",
-                            greeks_explanations={}
-                        )
-            else:
-                output = response
-        except Exception as e:
-            # Fallback if parsing fails
-            output = OptionPricingResult(
-                option_price=0.0,
-                delta=0.0,
-                gamma=0.0,
-                vega=0.0,
-                theta=0.0,
-                input_parameters={},
-                calculation_method="error",
-                greeks_explanations={}
-            )
+        # Format tool calls for compliance check
+        tool_calls_formatted = []
+        for tc in tool_calls:
+            name = tc.get('name', 'unknown')
+            args = tc.get('args', {})
+            args_str = ', '.join(f"{k}={v}" for k, v in args.items()) if isinstance(args, dict) else str(args)
+            tool_calls_formatted.append(f"{name}({args_str})")
+        
+        # Minimal compliance check
+        tool_used = any("calculer_prix_call_black_scholes" in tc for tc in tool_calls_formatted)
+        compliance_verdict = f"✅ Conforme - QuantLib utilisé" if tool_used else "❌ Non conforme - QuantLib requis"
+        
+        # Get response JSON
+        import json
+        if hasattr(result.output, 'model_dump'):
+            response = json.dumps(result.output.model_dump(), indent=2, ensure_ascii=False)
+            output = result.output
+        else:
+            response = json.dumps(result.output, indent=2, default=str, ensure_ascii=False)
+            output = result.output
+        
+        elapsed = time.time() - start
         
         # Extract detailed tool usage
         tool_info = {
-            "used": len(tool_calls) > 0,
-            "count": len(tool_calls),
-            "names": list(set(tc.split('(')[0] for tc in tool_calls if '(' in tc)),
-            "detailed_trace": tool_calls  # Store full trace
+            "used": len(tool_calls_formatted) > 0,
+            "count": len(tool_calls_formatted),
+            "names": list(set(tc.split('(')[0] for tc in tool_calls_formatted if '(' in tc)),
+            "detailed_trace": tool_calls_formatted  # Store full trace
         }
         
         # Create detailed tool trace HTML
-        tool_trace_html = format_detailed_tool_trace(tool_calls)
+        tool_trace_html = format_detailed_tool_trace(tool_calls_formatted)
         
         # Compliance check
         compliance = check_agent_compliance("Agent 4", output, tool_info)
@@ -1083,9 +1315,10 @@ def run_agent_4(prompt: str):
         # Add metadata for judge
         if isinstance(complete_result, dict):
             complete_result["_metadata"] = {
-                "tool_calls": len(tool_calls),
+                "tool_calls": len(tool_calls_formatted),
                 "compliance": compliance_verdict,
-                "elapsed": elapsed
+                "elapsed": elapsed,
+                "endpoint_used": endpoint
             }
         
         print(f"[DEBUG] Stored Agent 4 result with Greeks: {list(complete_result.keys()) if isinstance(complete_result, dict) else 'not a dict'}")
@@ -1098,16 +1331,128 @@ def run_agent_4(prompt: str):
         loop.close()
 
 
-def run_agent_5_convert(prompt: str):
+def run_agent_5_convert(prompt: str, endpoint: str = "koyeb"):
     """Run Agent 5 - Message Conversion."""
+    # Check if endpoint is disabled for this agent
+    if endpoint == "llm_pro_finance":
+        return (
+            "LLM Pro Finance endpoint doesn't support tool calls yet. This feature is coming soon. "
+            "Please use Koyeb or HuggingFace endpoint for Agent 5 - Convert.",
+            "", "", "Error"
+        )
+    
     try:
         from examples.agent_5 import agent_5
+        from app.models import get_model_for_endpoint
+        from pydantic_ai import Agent
+        
+        # Create agent with selected endpoint model
+        model = get_model_for_endpoint(endpoint)
+        # Track whether fallback occurred
+        fallback_occurred = False
+        actual_endpoint = endpoint
+        
+        # Recreate agent with new model (agents are immutable, so we create a new one)
+        # Try to access agent configuration using various methods
+        try:
+            from pydantic_ai import ModelSettings
+            
+            # Get model_settings (it's a dict, convert to ModelSettings)
+            model_settings_dict = agent_5.model_settings if hasattr(agent_5, 'model_settings') else {}
+            model_settings = ModelSettings(**model_settings_dict) if model_settings_dict else None
+            
+            # Get system prompt - try to extract from instructions or use the agent's method
+            # Since system_prompt is a method that returns a function, we'll need to import it
+            # For now, import the system prompt from the examples file
+            from examples.agent_5 import (
+                parser_swift_mt, parser_iso20022, generer_swift_mt, generer_iso20022,
+                convertir_swift_vers_iso20022, convertir_iso20022_vers_swift,
+                validate_swift_message, validate_iso20022_message
+            )
+            from pydantic_ai import Tool
+            
+            system_prompt = """Vous êtes un expert en conversion de messages financiers entre SWIFT MT et ISO 20022.
+
+RÈGLES ABSOLUES POUR LES CONVERSIONS:
+⚠️  OBLIGATOIRE: Pour TOUTE conversion, utilisez UNIQUEMENT les outils de conversion dédiés:
+1. SWIFT → ISO 20022: VOUS DEVEZ utiliser convertir_swift_vers_iso20022 (PAS parser + generer)
+2. ISO 20022 → SWIFT: VOUS DEVEZ utiliser convertir_iso20022_vers_swift (PAS parser + generer)
+
+❌ NE PAS utiliser parser_swift_mt + generer_iso20022 pour convertir
+❌ NE PAS utiliser parser_iso20022 + generer_swift_mt pour convertir
+✅ UTILISEZ UNIQUEMENT les outils convertir_* pour les conversions
+
+VALIDATION OBLIGATOIRE:
+- Vérifiez que le message converti contient TOUS les champs requis
+- Validez l'entrée avant conversion en utilisant validate_swift_message ou validate_iso20022_message
+- Assurez-vous que le message ISO 20022 généré est complet avec tous les éléments requis (GrpHdr, PmtInf, Dbtr, Cdtr, InstdAmt, etc.)
+
+OUTILS AUXILIAIRES (uniquement pour analyse, PAS pour conversion):
+- parser_swift_mt: Pour analyser un message SWIFT (pas pour conversion)
+- parser_iso20022: Pour analyser un message ISO 20022 (pas pour conversion)
+- generer_swift_mt: Pour générer un message SWIFT depuis zéro (pas pour conversion)
+- generer_iso20022: Pour générer un message ISO 20022 depuis zéro (pas pour conversion)
+- validate_swift_message: Pour valider la structure d'un message SWIFT
+- validate_iso20022_message: Pour valider la structure d'un message ISO 20022
+
+FORMATS SUPPORTÉS:
+- SWIFT MT103 (Customer Payment) ↔ ISO 20022 pacs.008 (Customer Credit Transfer)
+
+ACTION REQUISE: Quand on vous demande de convertir, appelez DIRECTEMENT convertir_swift_vers_iso20022 ou convertir_iso20022_vers_swift.
+Vérifiez que le message converti contient TOUS les champs requis. Validez l'entrée avant conversion.
+Répondez en français avec les messages convertis."""
+            
+            # Get tools from _function_toolset
+            tools = []
+            if hasattr(agent_5, '_function_toolset') and hasattr(agent_5._function_toolset, 'tools'):
+                tools_dict = agent_5._function_toolset.tools
+                # Extract Tool objects from dict values
+                tools = list(tools_dict.values())
+            
+            # If tools list is empty, recreate from imported functions
+            if not tools:
+                tools = [
+                    Tool(parser_swift_mt, name="parser_swift_mt", description="⚠️ UNIQUEMENT pour analyser un message SWIFT (pas pour conversion). Pour convertir, utilisez convertir_swift_vers_iso20022. Fournissez le message SWIFT brut."),
+                    Tool(parser_iso20022, name="parser_iso20022", description="⚠️ UNIQUEMENT pour analyser un message ISO 20022 (pas pour conversion). Pour convertir, utilisez convertir_iso20022_vers_swift. Fournissez le contenu XML."),
+                    Tool(generer_swift_mt, name="generer_swift_mt", description="⚠️ UNIQUEMENT pour générer un message SWIFT depuis zéro (pas pour conversion). Pour convertir, utilisez convertir_iso20022_vers_swift. Fournissez message_type (ex: '103'), fields (dict), et optionnellement sender_bic, receiver_bic, session_sequence."),
+                    Tool(generer_iso20022, name="generer_iso20022", description="⚠️ UNIQUEMENT pour générer un message ISO 20022 depuis zéro (pas pour conversion). Pour convertir, utilisez convertir_swift_vers_iso20022. Fournissez message_type, message_id, amount, currency, debtor_name, debtor_iban, creditor_name, creditor_iban, et optionnellement reference, execution_date."),
+                    Tool(convertir_swift_vers_iso20022, name="convertir_swift_vers_iso20022", description="⚠️ OBLIGATOIRE pour convertir SWIFT MT → ISO 20022. Utilisez CET outil pour toutes les conversions SWIFT vers ISO. Fournissez le message SWIFT brut complet. Supporte MT103 → pacs.008. NE PAS utiliser parser + generer pour convertir."),
+                    Tool(convertir_iso20022_vers_swift, name="convertir_iso20022_vers_swift", description="⚠️ OBLIGATOIRE pour convertir ISO 20022 → SWIFT MT. Utilisez CET outil pour toutes les conversions ISO vers SWIFT. Fournissez le contenu XML complet. Supporte pacs.008 → MT103. NE PAS utiliser parser + generer pour convertir."),
+                    Tool(validate_swift_message, name="validate_swift_message", description="Valide la structure d'un message SWIFT MT. Vérifie les blocs requis (1, 2, 4) et les champs essentiels. Fournissez le message SWIFT brut."),
+                    Tool(validate_iso20022_message, name="validate_iso20022_message", description="Valide la structure d'un message ISO 20022 XML. Vérifie que le XML est bien formé, les éléments requis, les formats de données, et les IBANs. Fournissez le contenu XML."),
+                ]
+            
+            # Get output_type
+            output_type = agent_5.output_type if hasattr(agent_5, 'output_type') else None
+            
+            # Recreate the agent
+            if model_settings and system_prompt:
+                dynamic_agent = Agent(
+                    model,
+                    model_settings=model_settings,
+                    system_prompt=system_prompt,
+                    tools=tools,
+                    output_type=output_type,
+                )
+            else:
+                raise AttributeError("Could not access required agent configuration")
+        except (AttributeError, TypeError, ImportError) as e:
+            # Fallback: use original agent (will use default endpoint)
+            print(f"[WARNING] Could not recreate Agent 5 with selected endpoint '{endpoint}', using default endpoint: {e}")
+            dynamic_agent = agent_5
+            fallback_occurred = True
+            # Get actual endpoint from fallback agent's model
+            if hasattr(dynamic_agent, 'model'):
+                actual_endpoint = get_endpoint_from_model(dynamic_agent.model)
+                if actual_endpoint == "unknown":
+                    actual_endpoint = f"{endpoint} (fallback to default)"
+        
         # Agent 5 operations can be complex - use longer timeout (120s)
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
             output, usage, elapsed, tool_info = loop.run_until_complete(
-                run_agent_async(agent_5, prompt, None, "Agent 5 - Convert", timeout_seconds=120.0)
+                run_agent_async(dynamic_agent, prompt, None, "Agent 5 - Convert", timeout_seconds=120.0)
             )
         finally:
             loop.close()
@@ -1118,11 +1463,16 @@ def run_agent_5_convert(prompt: str):
         # Store complete result with metadata
         complete_result = output.model_dump() if hasattr(output, 'model_dump') else {"output": str(output), "raw": str(output)}
         if isinstance(complete_result, dict):
-            complete_result["_metadata"] = {
+            metadata = {
                 "tool_calls": tool_info.get("count", 0),
                 "elapsed": elapsed,
-                "tools_used": tool_info.get("names", [])
+                "tools_used": tool_info.get("names", []),
+                "endpoint_used": actual_endpoint
             }
+            if fallback_occurred:
+                metadata["fallback_occurred"] = True
+                metadata["requested_endpoint"] = endpoint
+            complete_result["_metadata"] = metadata
         
         results_store["Agent 5 - Convert"] = complete_result
         print(f"[DEBUG] Stored Agent 5-Convert result. Type: {type(complete_result)}")
@@ -1134,28 +1484,226 @@ def run_agent_5_convert(prompt: str):
         return f"Error: {error_msg}", "", "", "Error"
 
 
-def run_agent_5_validate(prompt: str):
+def run_agent_5_validate(prompt: str, endpoint: str = "koyeb"):
     """Run Agent 5 - Message Validation."""
+    # Check if endpoint is disabled for this agent
+    if endpoint == "llm_pro_finance":
+        return (
+            "LLM Pro Finance endpoint doesn't support tool calls yet. This feature is coming soon. "
+            "Please use Koyeb or HuggingFace endpoint for Agent 5 - Validate.",
+            "", "", "Error"
+        )
+    
     from examples.agent_5_validator import agent_5_validator
-    output, usage, elapsed, tool_info = execute_agent(agent_5_validator, prompt, None, "Agent 5 - Validate")
+    from app.models import get_model_for_endpoint
+    from pydantic_ai import Agent, ModelSettings
+    from examples.agent_5_validator import (
+        valider_swift_message, valider_iso20022_message, valider_conversion
+    )
+    from pydantic_ai import Tool
+    
+    # Create agent with selected endpoint model
+    model = get_model_for_endpoint(endpoint)
+    # Track whether fallback occurred
+    fallback_occurred = False
+    actual_endpoint = endpoint
+    
+    try:
+        # Get model_settings (it's a dict, convert to ModelSettings)
+        model_settings_dict = agent_5_validator.model_settings if hasattr(agent_5_validator, 'model_settings') else {}
+        model_settings = ModelSettings(**model_settings_dict) if model_settings_dict else None
+        
+        # Import system prompt
+        system_prompt = """Vous êtes un expert en validation de messages financiers SWIFT MT et ISO 20022.
+
+⚠️ RÈGLES ABSOLUES:
+1. VOUS DEVEZ TOUJOURS utiliser les outils de validation AVANT de répondre
+2. Pour valider un message SWIFT → APPELEZ valider_swift_message (OBLIGATOIRE)
+3. Pour valider un message ISO 20022 → APPELEZ valider_iso20022_message (OBLIGATOIRE)
+4. Pour valider une conversion → APPELEZ valider_conversion (OBLIGATOIRE)
+5. NE RÉPONDEZ JAMAIS sans avoir appelé un outil de validation
+6. Utilisez TOUJOURS les outils - c'est la seule façon de valider correctement
+
+VALIDATIONS À EFFECTUER:
+- Structure du message (blocs/éléments requis)
+- Format des champs (dates, montants, devises)
+- Format IBAN (2 lettres + 2 chiffres + alphanumérique)
+- Présence des champs obligatoires
+- Cohérence des données après conversion
+
+ACTION REQUISE: Quand on vous demande de valider, appelez DIRECTEMENT l'outil approprié.
+Répondez avec un objet ValidationResult structuré basé sur les résultats de l'outil."""
+        
+        # Get tools from _function_toolset
+        tools = []
+        if hasattr(agent_5_validator, '_function_toolset') and hasattr(agent_5_validator._function_toolset, 'tools'):
+            tools_dict = agent_5_validator._function_toolset.tools
+            tools = list(tools_dict.values())
+        
+        # If tools list is empty, recreate from imported functions
+        if not tools:
+            tools = [
+                Tool(valider_swift_message, name="valider_swift_message", description="Valide un message SWIFT MT. Vérifie la structure, les blocs requis, les champs obligatoires, et les formats. Fournissez le message SWIFT brut."),
+                Tool(valider_iso20022_message, name="valider_iso20022_message", description="Valide un message ISO 20022 XML. Vérifie la structure XML, les éléments requis, les formats de données, et les IBANs. Fournissez le contenu XML."),
+                Tool(valider_conversion, name="valider_conversion", description="Valide une conversion entre SWIFT MT et ISO 20022. Vérifie que tous les champs ont été correctement mappés et que les données sont cohérentes. Fournissez le message source et le message converti."),
+            ]
+        
+        # Get output_type
+        output_type = agent_5_validator.output_type if hasattr(agent_5_validator, 'output_type') else None
+        
+        # Recreate the agent
+        if model_settings and system_prompt:
+            dynamic_agent = Agent(
+                model,
+                model_settings=model_settings,
+                system_prompt=system_prompt,
+                tools=tools,
+                output_type=output_type,
+            )
+        else:
+            raise AttributeError("Could not access required agent configuration")
+    except (AttributeError, TypeError, ImportError) as e:
+        print(f"[WARNING] Could not recreate Agent 5 Validator with selected endpoint '{endpoint}', using default endpoint: {e}")
+        dynamic_agent = agent_5_validator
+        fallback_occurred = True
+        # Get actual endpoint from fallback agent's model
+        if hasattr(dynamic_agent, 'model'):
+            actual_endpoint = get_endpoint_from_model(dynamic_agent.model)
+            if actual_endpoint == "unknown":
+                actual_endpoint = f"{endpoint} (fallback to default)"
+    
+    output, usage, elapsed, tool_info = execute_agent(dynamic_agent, prompt, None, "Agent 5 - Validate")
     
     if isinstance(output, dict) and "error" in output:
         return output["error"], "", "", "Error"
     
-    results_store["Agent 5 - Validate"] = output.model_dump() if hasattr(output, 'model_dump') else str(output)
+    result_data = output.model_dump() if hasattr(output, 'model_dump') else str(output)
+    if isinstance(result_data, dict):
+        metadata = {
+            "tool_calls": tool_info.get("count", 0),
+            "elapsed": elapsed,
+            "endpoint_used": actual_endpoint
+        }
+        if fallback_occurred:
+            metadata["fallback_occurred"] = True
+            metadata["requested_endpoint"] = endpoint
+        result_data["_metadata"] = metadata
+    
+    results_store["Agent 5 - Validate"] = result_data
     return format_parsed_output(output), format_output(output), format_metrics(elapsed, usage, tool_info), f"Success ({elapsed:.2f}s)"
 
 
-def run_agent_5_risk(prompt: str):
+def run_agent_5_risk(prompt: str, endpoint: str = "koyeb"):
     """Run Agent 5 - Risk Assessment."""
+    # Check if endpoint is disabled for this agent
+    if endpoint == "llm_pro_finance":
+        return (
+            "LLM Pro Finance endpoint doesn't support tool calls yet. This feature is coming soon. "
+            "Please use Koyeb or HuggingFace endpoint for Agent 5 - Risk.",
+            "", "", "Error"
+        )
+    
     try:
         from examples.agent_5_risk import agent_5_risk
+        from app.models import get_model_for_endpoint
+        from pydantic_ai import Agent
+        
+        # Create agent with selected endpoint model
+        model = get_model_for_endpoint(endpoint)
+        # Track whether fallback occurred
+        fallback_occurred = False
+        actual_endpoint = endpoint
+        
+        try:
+            from pydantic_ai import ModelSettings
+            from examples.agent_5_risk import (
+                evaluer_risque_message, calculer_score_risque_montant,
+                verifier_pays_risque, verifier_pep_sanctions, analyser_patternes_suspects
+            )
+            from pydantic_ai import Tool
+            
+            # Get model_settings (it's a dict, convert to ModelSettings)
+            model_settings_dict = agent_5_risk.model_settings if hasattr(agent_5_risk, 'model_settings') else {}
+            model_settings = ModelSettings(**model_settings_dict) if model_settings_dict else None
+            
+            # Import system prompt
+            system_prompt = """Vous êtes un expert en évaluation des risques financiers et conformité AML/KYC.
+
+RÈGLES CRITIQUES:
+1. TOUJOURS utiliser les outils de risque pour évaluer les messages
+2. Pour évaluer le risque d'un message: utilisez evaluer_risque_message
+3. Pour analyser le risque de montant: utilisez calculer_score_risque_montant
+4. Pour vérifier les pays à risque: utilisez verifier_pays_risque
+5. Pour vérifier PEP/sanctions: utilisez verifier_pep_sanctions
+6. Pour analyser les patterns suspects: utilisez analyser_patternes_suspects
+
+MATRICE DE RISQUE:
+- CRITICAL (≥0.7): Bloquer la transaction
+- HIGH (≥0.5): Révision requise
+- MEDIUM (≥0.3): Surveillance renforcée
+- LOW (<0.3): Risque acceptable
+
+FACTEURS DE RISQUE À VÉRIFIER:
+- Montants élevés ou suspects
+- Pays/juridictions à haut risque
+- Personnes politiquement exposées (PEP)
+- Entités sanctionnées
+- Patterns suspects (structuration, timing)
+- Données manquantes ou incohérentes
+
+Répondez avec un objet RiskScore structuré incluant:
+- Score de risque global (0.0-1.0) et niveau (LOW/MEDIUM/HIGH/CRITICAL)
+- Matrice de risque par catégorie
+- Facteurs de risque identifiés
+- Statut suspect (is_suspect: true/false)
+- Recommandations d'action"""
+            
+            # Get tools from _function_toolset
+            tools = []
+            if hasattr(agent_5_risk, '_function_toolset') and hasattr(agent_5_risk._function_toolset, 'tools'):
+                tools_dict = agent_5_risk._function_toolset.tools
+                tools = list(tools_dict.values())
+            
+            # If tools list is empty, recreate from imported functions
+            if not tools:
+                tools = [
+                    Tool(evaluer_risque_message, name="evaluer_risque_message", description="Évalue le risque global d'un message financier (SWIFT ou ISO 20022). Fournissez le message complet."),
+                    Tool(calculer_score_risque_montant, name="calculer_score_risque_montant", description="Calcule le score de risque basé sur le montant de la transaction. Fournissez le montant et la devise."),
+                    Tool(verifier_pays_risque, name="verifier_pays_risque", description="Vérifie si un pays est dans une liste de pays à haut risque. Fournissez le code pays (ISO 3166-1 alpha-2)."),
+                    Tool(verifier_pep_sanctions, name="verifier_pep_sanctions", description="Vérifie si une personne ou entité est une PEP (Personne Politiquement Exposée) ou sous sanctions. Fournissez le nom et le pays."),
+                    Tool(analyser_patternes_suspects, name="analyser_patternes_suspects", description="Analyse les patterns suspects dans une transaction (structuration, timing, etc.). Fournissez les détails de la transaction."),
+                ]
+            
+            # Get output_type
+            output_type = agent_5_risk.output_type if hasattr(agent_5_risk, 'output_type') else None
+            
+            # Recreate the agent
+            if model_settings and system_prompt:
+                dynamic_agent = Agent(
+                    model,
+                    model_settings=model_settings,
+                    system_prompt=system_prompt,
+                    tools=tools,
+                    output_type=output_type,
+                )
+            else:
+                raise AttributeError("Could not access required agent configuration")
+        except (AttributeError, TypeError, ImportError) as e:
+            print(f"[WARNING] Could not recreate Agent 5 Risk with selected endpoint '{endpoint}', using default endpoint: {e}")
+            dynamic_agent = agent_5_risk
+            fallback_occurred = True
+            # Get actual endpoint from fallback agent's model
+            if hasattr(dynamic_agent, 'model'):
+                actual_endpoint = get_endpoint_from_model(dynamic_agent.model)
+                if actual_endpoint == "unknown":
+                    actual_endpoint = f"{endpoint} (fallback to default)"
+        
         # Agent 5 Risk operations can be complex - use longer timeout (120s)
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
             output, usage, elapsed, tool_info = loop.run_until_complete(
-                run_agent_async(agent_5_risk, prompt, None, "Agent 5 - Risk", timeout_seconds=120.0)
+                run_agent_async(dynamic_agent, prompt, None, "Agent 5 - Risk", timeout_seconds=120.0)
             )
         finally:
             loop.close()
@@ -1163,7 +1711,19 @@ def run_agent_5_risk(prompt: str):
         if isinstance(output, dict) and "error" in output:
             return output["error"], "", "", "Error"
         
-        results_store["Agent 5 - Risk"] = output.model_dump() if hasattr(output, 'model_dump') else str(output)
+        result_data = output.model_dump() if hasattr(output, 'model_dump') else str(output)
+        if isinstance(result_data, dict):
+            metadata = {
+                "tool_calls": tool_info.get("count", 0),
+                "elapsed": elapsed,
+                "endpoint_used": actual_endpoint
+            }
+            if fallback_occurred:
+                metadata["fallback_occurred"] = True
+                metadata["requested_endpoint"] = endpoint
+            result_data["_metadata"] = metadata
+        
+        results_store["Agent 5 - Risk"] = result_data
         return format_parsed_output(output), format_output(output), format_metrics(elapsed, usage, tool_info), f"Success ({elapsed:.2f}s)"
     except Exception as e:
         error_msg = str(e)
@@ -1243,7 +1803,16 @@ Provide specific, constructive feedback.""",
     if isinstance(output, dict) and "error" in output:
         return output["error"], "", "", "Error"
     
-    results_store["Agent 6"] = output.model_dump() if hasattr(output, 'model_dump') else output
+    result_data = output.model_dump() if hasattr(output, 'model_dump') else output
+    # Judge always uses LLM Pro Finance
+    if isinstance(result_data, dict):
+        if "_metadata" not in result_data:
+            result_data["_metadata"] = {}
+        result_data["_metadata"]["endpoint_used"] = "llm_pro_finance"
+        result_data["_metadata"]["elapsed"] = elapsed
+        result_data["_metadata"]["tool_calls"] = tool_info.get("count", 0)
+    
+    results_store["Agent 6"] = result_data
     return format_parsed_output(output), format_output(output), format_metrics(elapsed, usage, tool_info), f"Success ({elapsed:.2f}s)"
 
 
@@ -1251,8 +1820,17 @@ Provide specific, constructive feedback.""",
 # UI
 # ============================================================================
 
-def create_agent_tab(agent_key: str, run_fn):
-    """Create a tab for an agent with improved layout: readable output + JSON."""
+def create_agent_tab(agent_key: str, run_fn, is_judge: bool = False, exclude_endpoints: list = None, disabled_endpoints: dict = None):
+    """Create a tab for an agent with improved layout: readable output + JSON.
+    
+    Args:
+        agent_key: Key in AGENT_INFO dict
+        run_fn: Function to run the agent (should accept prompt and endpoint parameters)
+        is_judge: If True, this is the judge agent (no endpoint selector, always uses LLM Pro)
+        exclude_endpoints: List of endpoint keys to exclude from the selector (e.g., ["llm_pro_finance"])
+        disabled_endpoints: Dict mapping endpoint keys to reason strings for why they're disabled
+                           (e.g., {"llm_pro_finance": "Tool calls not yet supported"})
+    """
     info = AGENT_INFO[agent_key]
     
     gr.Markdown(f"### {info['title']}")
@@ -1266,6 +1844,77 @@ def create_agent_tab(agent_key: str, run_fn):
                 lines=5,
                 placeholder="Enter your prompt..."
             )
+            
+            # Endpoint selector (except for Judge)
+            if is_judge:
+                gr.Markdown("**Model Endpoint:** LLM Pro 70B (fixed)")
+            else:
+                # Get available endpoints
+                exclude_list = exclude_endpoints or []
+                disabled_dict = disabled_endpoints or {}
+                available_endpoints = get_available_endpoints(include_llm_pro=True)
+                
+                # Build endpoint options with labels
+                # Include disabled endpoints but mark them clearly
+                endpoint_options = []
+                endpoint_values = []
+                disabled_info = []
+                
+                if available_endpoints.get("koyeb", False) and "koyeb" not in exclude_list:
+                    endpoint_options.append("Koyeb (Qwen 8B)")
+                    endpoint_values.append("koyeb")
+                if available_endpoints.get("hf", False) and "hf" not in exclude_list:
+                    endpoint_options.append("HuggingFace (Qwen 8B)")
+                    endpoint_values.append("hf")
+                
+                # Handle LLM Pro - show as disabled if in disabled_endpoints, otherwise show normally
+                if available_endpoints.get("llm_pro_finance", False):
+                    if "llm_pro_finance" in disabled_dict:
+                        # Show as disabled
+                        endpoint_options.append("LLM Pro (Llama 70B) ⚠️ Disabled")
+                        endpoint_values.append("llm_pro_finance")
+                        disabled_info.append(f"**LLM Pro (Llama 70B):** {disabled_dict['llm_pro_finance']}")
+                    elif "llm_pro_finance" not in exclude_list:
+                        # Show as enabled
+                        endpoint_options.append("LLM Pro (Llama 70B)")
+                        endpoint_values.append("llm_pro_finance")
+                
+                if available_endpoints.get("ollama", False) and "ollama" not in exclude_list:
+                    ollama_settings = Settings()
+                    model_name = ollama_settings.ollama_model or "Local Model"
+                    endpoint_options.append(f"Ollama ({model_name})")
+                    endpoint_values.append("ollama")
+                
+                # Default to first available enabled endpoint (prefer koyeb > hf > llm_pro)
+                # Don't default to disabled endpoints
+                enabled_values = [v for v in endpoint_values if v not in disabled_dict]
+                default_endpoint = "koyeb" if "koyeb" in enabled_values else (enabled_values[0] if enabled_values else (endpoint_values[0] if endpoint_values else "koyeb"))
+                
+                if endpoint_options:
+                    # Create choices as tuples (label, value) for Radio component
+                    # Gradio Radio expects (label, value) format
+                    endpoint_choices = list(zip(endpoint_options, endpoint_values))
+                    endpoint_selector = gr.Radio(
+                        choices=endpoint_choices,
+                        label="Model Endpoint",
+                        value=default_endpoint,
+                        info="Select which endpoint to use for this agent"
+                    )
+                    
+                    # Show disabled endpoint info if any
+                    if disabled_info:
+                        gr.Markdown(
+                            "<div style='margin-top: 8px; padding: 8px; background: #fef3c7; border-radius: 4px; border-left: 3px solid #f59e0b;'>"
+                            + "<div style='font-size: 12px; color: #92400e;'>" +
+                            "<strong>⚠️ Disabled Endpoints:</strong><br/>" +
+                            "<br/>".join(disabled_info) +
+                            "</div></div>"
+                        )
+                else:
+                    # No endpoints available - show warning
+                    gr.Markdown("⚠️ **No endpoints available** - Please check server status")
+                    endpoint_selector = gr.State(value="koyeb")  # Default fallback
+            
             run_btn = gr.Button("Run", variant="primary")
             status = gr.Textbox(label="Status", interactive=False, value="Ready")
             metrics = gr.HTML(label="Metrics", value="<div style='padding: 8px; color: #9ca3af; font-size: 13px;'>Run agent to see metrics</div>")
@@ -1276,7 +1925,14 @@ def create_agent_tab(agent_key: str, run_fn):
             # Raw JSON output below
             json_output = gr.Code(label="JSON Output (Full Data)", language="json", lines=10)
     
-    run_btn.click(fn=run_fn, inputs=[input_text], outputs=[parsed_output, json_output, metrics, status])
+    # Update run button to pass endpoint
+    if is_judge:
+        # Judge always uses LLM Pro, no endpoint parameter needed
+        run_btn.click(fn=run_fn, inputs=[input_text], outputs=[parsed_output, json_output, metrics, status])
+    else:
+        # Other agents use selected endpoint
+        # endpoint_selector is either a Radio or State component
+        run_btn.click(fn=run_fn, inputs=[input_text, endpoint_selector], outputs=[parsed_output, json_output, metrics, status])
 
 
 def create_interface():
@@ -1302,16 +1958,34 @@ def create_interface():
         # Tabs for each agent
         with gr.Tabs():
             with gr.TabItem("Portfolio Extractor"):
-                create_agent_tab("Agent 1", run_agent_1)
+                create_agent_tab("Agent 1", run_agent_1, is_judge=False)
             
             with gr.TabItem("Financial Calculator"):
-                create_agent_tab("Agent 2", run_agent_2)
+                # Agent 2 doesn't support LLM Pro Finance (tool_choice issue) - show as disabled
+                create_agent_tab(
+                    "Agent 2", 
+                    run_agent_2, 
+                    is_judge=False, 
+                    disabled_endpoints={"llm_pro_finance": "Tool calls not yet supported (coming soon)"}
+                )
             
             with gr.TabItem("Risk & Tax Advisor"):
-                create_agent_tab("Agent 3", run_agent_3)
+                # Agent 3 uses tools - LLM Pro disabled
+                create_agent_tab(
+                    "Agent 3", 
+                    run_agent_3, 
+                    is_judge=False,
+                    disabled_endpoints={"llm_pro_finance": "Tool calls not yet supported (coming soon)"}
+                )
             
             with gr.TabItem("Option Pricing"):
-                create_agent_tab("Agent 4", run_agent_4)
+                # Agent 4 uses tools - LLM Pro disabled
+                create_agent_tab(
+                    "Agent 4", 
+                    run_agent_4, 
+                    is_judge=False,
+                    disabled_endpoints={"llm_pro_finance": "Tool calls not yet supported (coming soon)"}
+                )
             
             with gr.TabItem("SWIFT/ISO20022"):
                 gr.Markdown("### Complete SWIFT/ISO20022 Message Processing")
@@ -1320,18 +1994,33 @@ def create_interface():
                 with gr.Tabs():
                     with gr.TabItem("Convert"):
                         gr.Markdown("**Bidirectional conversion:** SWIFT MT ↔ ISO 20022 XML")
-                        create_agent_tab("Agent 5 - Convert", run_agent_5_convert)
+                        create_agent_tab(
+                            "Agent 5 - Convert", 
+                            run_agent_5_convert, 
+                            is_judge=False,
+                            disabled_endpoints={"llm_pro_finance": "Tool calls not yet supported (coming soon)"}
+                        )
                     
                     with gr.TabItem("Validate"):
                         gr.Markdown("**Message validation:** Check structure, format, and required fields")
-                        create_agent_tab("Agent 5 - Validate", run_agent_5_validate)
+                        create_agent_tab(
+                            "Agent 5 - Validate", 
+                            run_agent_5_validate, 
+                            is_judge=False,
+                            disabled_endpoints={"llm_pro_finance": "Tool calls not yet supported (coming soon)"}
+                        )
                     
                     with gr.TabItem("Risk Assessment"):
                         gr.Markdown("**AML/KYC risk scoring:** Evaluate transaction risk indicators")
-                        create_agent_tab("Agent 5 - Risk", run_agent_5_risk)
+                        create_agent_tab(
+                            "Agent 5 - Risk", 
+                            run_agent_5_risk, 
+                            is_judge=False,
+                            disabled_endpoints={"llm_pro_finance": "Tool calls not yet supported (coming soon)"}
+                        )
             
             with gr.TabItem("Judge (70B)"):
-                create_agent_tab("Agent 6", run_agent_6)
+                create_agent_tab("Agent 6", run_agent_6, is_judge=True)
         
         # Footer with settings info and PydanticAI link
         gr.HTML("""
