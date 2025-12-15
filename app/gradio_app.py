@@ -1017,25 +1017,41 @@ Répondez avec un objet Portfolio structuré."""
         return output["error"], "", "", "Error"
     
     # Client-side validation: Calculate total from positions (don't trust model arithmetic)
+    calculation_corrected = False
+    original_value = None
     if hasattr(output, 'positions') and hasattr(output, 'valeur_totale'):
         calculated_total = sum(pos.quantite * pos.prix_achat for pos in output.positions)
         if abs(output.valeur_totale - calculated_total) > 1:
-            print(f"[WARNING] Model calculated valeur_totale={output.valeur_totale}, but correct value is {calculated_total}. Correcting.")
+            original_value = output.valeur_totale
             output.valeur_totale = calculated_total
+            calculation_corrected = True
+            print(f"[WARNING] Model calculated valeur_totale={original_value}, but correct value is {calculated_total}. Correcting.")
     
     # Store complete result with metadata
     complete_result = output.model_dump() if hasattr(output, 'model_dump') else output
     if isinstance(complete_result, dict):
-        complete_result["_metadata"] = {
+        metadata = {
             "tool_calls": tool_info.get("count", 0),
             "elapsed": elapsed,
             "endpoint_used": endpoint
         }
+        # Add calculation correction info if applicable
+        if calculation_corrected:
+            metadata["calculation_corrected"] = True
+            metadata["original_valeur_totale"] = original_value
+            metadata["corrected_valeur_totale"] = output.valeur_totale
+        complete_result["_metadata"] = metadata
     
     results_store["Agent 1"] = complete_result
     print(f"[DEBUG] Stored Agent 1 result. results_store now has {len(results_store)} entries: {list(results_store.keys())}")
     
-    return format_parsed_output(output), format_output(output), format_metrics(elapsed, usage, tool_info), f"Success ({elapsed:.2f}s)"
+    # Format output with correction notice if applicable
+    parsed_output = format_parsed_output(output)
+    if calculation_corrected:
+        correction_notice = f"\n\n⚠️ **Calculation Correction:**\nThe model calculated a total value of {original_value:,.2f}€, but the correct value is {output.valeur_totale:,.2f}€ (calculated from extracted positions). The value has been automatically corrected.\n"
+        parsed_output = parsed_output + correction_notice
+    
+    return parsed_output, format_output(output), format_metrics(elapsed, usage, tool_info), f"Success ({elapsed:.2f}s)"
 
 
 def run_agent_2(prompt: str, endpoint: str = "koyeb"):
