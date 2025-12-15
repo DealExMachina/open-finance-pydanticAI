@@ -28,7 +28,7 @@ from app.config import Settings, ENDPOINTS
 # ============================================================================
 
 def get_endpoint_from_model(model) -> str:
-    """Determine which endpoint a model is using by comparing base_url.
+    """Determine which endpoint a model is using by comparing base_url or model type.
     
     Args:
         model: PydanticAI model instance
@@ -37,6 +37,12 @@ def get_endpoint_from_model(model) -> str:
         Endpoint name ("koyeb", "hf", "llm_pro_finance", "ollama") or "unknown"
     """
     try:
+        # Check if it's an OllamaModel from pydanticai-ollama
+        model_type_name = type(model).__name__
+        if model_type_name == "OllamaModel":
+            return "ollama"
+        
+        # For OpenAI-compatible models, check provider base_url
         if hasattr(model, 'provider') and hasattr(model.provider, 'base_url'):
             base_url = model.provider.base_url
             
@@ -54,7 +60,7 @@ def get_endpoint_from_model(model) -> str:
                     if base_url_clean == endpoint_url or base_url == f"{endpoint_url}/api":
                         return endpoint_name
                 elif endpoint_name == "ollama":
-                    # Ollama uses /v1 path
+                    # Ollama uses /v1 path (for OpenAI-compatible mode)
                     if base_url_clean == endpoint_url or base_url == f"{endpoint_url}/v1":
                         return endpoint_name
                 else:
