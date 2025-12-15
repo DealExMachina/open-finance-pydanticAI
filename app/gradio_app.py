@@ -115,7 +115,83 @@ def get_local_ollama_models(max_items: int = 4) -> Tuple[List[str], int]:
 # GLOBAL STATE
 # ============================================================================
 
-results_store: Dict[str, Any] = {}
+# Store all agent runs (including failures) for judge agent
+# Structure: {agent_name: [list of runs], ...}
+# Each run includes: output, endpoint, model, success, timestamp, metadata, input_prompt, etc.
+results_store: Dict[str, List[Dict[str, Any]]] = {}
+
+
+def store_agent_result(
+    agent_name: str,
+    output: Any,
+    endpoint: str,
+    success: bool = True,
+    error_msg: str = None,
+    input_prompt: str = None,
+    elapsed: float = None,
+    tool_info: Dict[str, Any] = None,
+    metadata: Dict[str, Any] = None,
+):
+    """Store an agent run result (success or failure) for the judge agent.
+    
+    Args:
+        agent_name: Name of the agent (e.g., "Agent 1", "Agent 5 - Risk")
+        output: The output from the agent (or None if failed)
+        endpoint: Endpoint used ("koyeb", "hf", "ollama", "llm_pro_finance")
+        success: Whether the run was successful
+        error_msg: Error message if failed
+        input_prompt: Original input prompt
+        elapsed: Time elapsed in seconds
+        tool_info: Tool usage information
+        metadata: Additional metadata
+    """
+    from datetime import datetime
+    
+    # Initialize list for this agent if not exists
+    if agent_name not in results_store:
+        results_store[agent_name] = []
+    
+    # Get model display name
+    model_name = get_model_display_name(endpoint)
+    
+    # Prepare result data
+    result_data = {
+        "timestamp": datetime.now().isoformat(),
+        "endpoint": endpoint,
+        "model": model_name,
+        "success": success,
+        "input_prompt": input_prompt,
+        "elapsed": elapsed,
+    }
+    
+    # Add output or error
+    if success and output is not None:
+        if hasattr(output, 'model_dump'):
+            result_data["output"] = output.model_dump()
+        else:
+            result_data["output"] = output
+    else:
+        result_data["error"] = error_msg or "Unknown error"
+        result_data["output"] = None
+    
+    # Add tool info
+    if tool_info:
+        result_data["tool_calls"] = tool_info.get("count", 0)
+        result_data["tool_details"] = tool_info.get("details", [])
+    
+    # Add metadata
+    if metadata:
+        result_data["metadata"] = metadata
+    elif success and hasattr(output, 'model_dump'):
+        # Try to extract metadata from output
+        output_dict = output.model_dump() if hasattr(output, 'model_dump') else {}
+        if isinstance(output_dict, dict) and "_metadata" in output_dict:
+            result_data["metadata"] = output_dict["_metadata"]
+    
+    # Append to list (don't overwrite previous runs)
+    results_store[agent_name].append(result_data)
+    
+    print(f"[DEBUG] Stored {agent_name} run #{len(results_store[agent_name])} (success={success}, endpoint={endpoint}, model={model_name})")
 
 # Agent descriptions
 AGENT_INFO = {
@@ -1061,6 +1137,16 @@ Répondez avec un objet Portfolio structuré."""
     output, usage, elapsed, tool_info = execute_agent(agent, prompt, Portfolio, "Agent 1", endpoint)
     
     if isinstance(output, dict) and "error" in output:
+        # Store failed run
+        store_agent_result(
+            agent_name="Agent 1",
+            output=None,
+            endpoint=endpoint,
+            success=False,
+            error_msg=output["error"],
+            input_prompt=prompt,
+            elapsed=elapsed,
+        )
         return output["error"], "", "", "Error"
     
     # Client-side validation: Calculate total from positions (don't trust model arithmetic)
@@ -1089,8 +1175,17 @@ Répondez avec un objet Portfolio structuré."""
             metadata["corrected_valeur_totale"] = output.valeur_totale
         complete_result["_metadata"] = metadata
     
-    results_store["Agent 1"] = complete_result
-    print(f"[DEBUG] Stored Agent 1 result. results_store now has {len(results_store)} entries: {list(results_store.keys())}")
+    # Store result using helper function (appends to list, doesn't overwrite)
+    store_agent_result(
+        agent_name="Agent 1",
+        output=output,
+        endpoint=endpoint,
+        success=True,
+        input_prompt=prompt,
+        elapsed=elapsed,
+        tool_info=tool_info,
+        metadata=metadata,
+    )
     
     # Format output with correction notice if applicable
     parsed_output = format_parsed_output(output)
@@ -1282,15 +1377,34 @@ Le JSON doit être exactement:
                 "fallback": fallback_used
             }
         
-        results_store["Agent 2"] = complete_result
-        print(f"[DEBUG] Stored Agent 2 result. Keys: {list(complete_result.keys()) if isinstance(complete_result, dict) else 'not a dict'}")
+        # Store result using helper function
+        store_agent_result(
+            agent_name="Agent 2",
+            output=output,
+            endpoint=endpoint_used,
+            success=True,
+            input_prompt=prompt,
+            elapsed=elapsed,
+            tool_info={"count": len(tool_calls_formatted), "details": tool_calls_formatted},
+            metadata=complete_result.get("_metadata", {}),
+        )
         
         # Get model display name based on actual endpoint used
         model_used = get_model_display_name(endpoint_used)
         return format_parsed_output(output), format_output(output), "".join(metrics_parts), f"Success with {model_used} ({elapsed:.2f}s)"
         
     except Exception as e:
-        return f"Error: {str(e)[:200]}", "", "", "Error"
+        error_msg = str(e)[:200]
+        # Store failed run
+        store_agent_result(
+            agent_name="Agent 2",
+            output=None,
+            endpoint=endpoint,
+            success=False,
+            error_msg=error_msg,
+            input_prompt=prompt,
+        )
+        return f"Error: {error_msg}", "", "", "Error"
     finally:
         loop.close()
 
@@ -1394,12 +1508,36 @@ Considérez les régimes fiscaux: PEA, assurance-vie, compte-titres, etc.""",
                 "endpoint_used": endpoint
             }
         
-        results_store["Agent 3"] = output
+        # Store result using helper function
+        store_agent_result(
+            agent_name="Agent 3",
+            output=output,
+            endpoint=endpoint,
+            success=True,
+            input_prompt=prompt,
+            elapsed=elapsed,
+            tool_info=combined_tool_info,
+            metadata={
+                "tool_calls": combined_tool_info.get("count", 0),
+                "elapsed": elapsed,
+                "endpoint_used": endpoint
+            },
+        )
         metrics_html = format_metrics(elapsed, Usage(), combined_tool_info) + compliance_html
         model_name = get_model_display_name(endpoint)
         return format_parsed_output(output), format_output(output), metrics_html, f"Success with {model_name} ({elapsed:.2f}s)"
     except Exception as e:
-        return str(e), "", "", "Error"
+        error_msg = str(e)
+        # Store failed run
+        store_agent_result(
+            agent_name="Agent 3",
+            output=None,
+            endpoint=endpoint,
+            success=False,
+            error_msg=error_msg,
+            input_prompt=prompt,
+        )
+        return error_msg, "", "", "Error"
     finally:
         loop.close()
 
@@ -1509,7 +1647,20 @@ RÈGLES ABSOLUES:
         
         # Store complete result with all Greeks for judge agent
         complete_result = output.model_dump() if hasattr(output, 'model_dump') else output
-        results_store["Agent 4"] = complete_result
+        store_agent_result(
+            agent_name="Agent 4",
+            output=output,
+            endpoint=endpoint,
+            success=True,
+            input_prompt=prompt,
+            elapsed=elapsed,
+            tool_info={"count": len(tool_calls_formatted), "details": tool_calls_formatted},
+            metadata={
+                "tool_calls": len(tool_calls_formatted),
+                "elapsed": elapsed,
+                "endpoint_used": endpoint
+            },
+        )
         
         # Add metadata for judge
         if isinstance(complete_result, dict):
@@ -1754,6 +1905,16 @@ Répondez en français avec les messages convertis."""
             loop.close()
         
         if isinstance(output, dict) and "error" in output:
+            # Store failed run
+            store_agent_result(
+                agent_name="Agent 5 - Convert",
+                output=None,
+                endpoint=endpoint,
+                success=False,
+                error_msg=output["error"],
+                input_prompt=prompt,
+                elapsed=elapsed,
+            )
             return output["error"], "", "", "Error"
         
         # Store complete result with metadata
@@ -1770,14 +1931,32 @@ Répondez en français avec les messages convertis."""
                 metadata["requested_endpoint"] = endpoint
             complete_result["_metadata"] = metadata
         
-        results_store["Agent 5 - Convert"] = complete_result
-        print(f"[DEBUG] Stored Agent 5-Convert result. Type: {type(complete_result)}")
+        # Store result using helper function
+        store_agent_result(
+            agent_name="Agent 5 - Convert",
+            output=output,
+            endpoint=actual_endpoint,
+            success=True,
+            input_prompt=prompt,
+            elapsed=elapsed,
+            tool_info=tool_info,
+            metadata=metadata,
+        )
         
         model_name = get_model_display_name(actual_endpoint)
         return format_parsed_output(output), format_output(output), format_metrics(elapsed, usage, tool_info), f"Success with {model_name} ({elapsed:.2f}s)"
     except Exception as e:
         error_msg = str(e)
         print(f"[ERROR] Agent 5 Convert failed: {error_msg}")
+        # Store failed run
+        store_agent_result(
+            agent_name="Agent 5 - Convert",
+            output=None,
+            endpoint=endpoint,
+            success=False,
+            error_msg=error_msg,
+            input_prompt=prompt,
+        )
         return f"Error: {error_msg}", "", "", "Error"
 
 
@@ -1893,6 +2072,16 @@ Répondez avec un objet ValidationResult structuré basé sur les résultats de 
     output, usage, elapsed, tool_info = execute_agent(dynamic_agent, enhanced_prompt, None, "Agent 5 - Validate", endpoint)
     
     if isinstance(output, dict) and "error" in output:
+        # Store failed run
+        store_agent_result(
+            agent_name="Agent 5 - Validate",
+            output=None,
+            endpoint=endpoint,
+            success=False,
+            error_msg=output["error"],
+            input_prompt=prompt,
+            elapsed=elapsed,
+        )
         return output["error"], "", "", "Error"
     
     result_data = output.model_dump() if hasattr(output, 'model_dump') else str(output)
@@ -1907,7 +2096,17 @@ Répondez avec un objet ValidationResult structuré basé sur les résultats de 
             metadata["requested_endpoint"] = endpoint
         result_data["_metadata"] = metadata
     
-    results_store["Agent 5 - Validate"] = result_data
+    # Store result using helper function
+    store_agent_result(
+        agent_name="Agent 5 - Validate",
+        output=output,
+        endpoint=actual_endpoint,
+        success=True,
+        input_prompt=prompt,
+        elapsed=elapsed,
+        tool_info=tool_info,
+        metadata=metadata,
+    )
     model_name = get_model_display_name(actual_endpoint)
     return format_parsed_output(output), format_output(output), format_metrics(elapsed, usage, tool_info), f"Success with {model_name} ({elapsed:.2f}s)"
 
@@ -2065,6 +2264,16 @@ Répondez avec un objet RiskScore structuré incluant:
             loop.close()
         
         if isinstance(output, dict) and "error" in output:
+            # Store failed run
+            store_agent_result(
+                agent_name="Agent 5 - Risk",
+                output=None,
+                endpoint=endpoint,
+                success=False,
+                error_msg=output["error"],
+                input_prompt=enhanced_prompt,
+                elapsed=elapsed,
+            )
             return output["error"], "", "", "Error"
         
         result_data = output.model_dump() if hasattr(output, 'model_dump') else str(output)
@@ -2079,12 +2288,32 @@ Répondez avec un objet RiskScore structuré incluant:
                 metadata["requested_endpoint"] = endpoint
             result_data["_metadata"] = metadata
         
-        results_store["Agent 5 - Risk"] = result_data
+        # Store result using helper function
+        store_agent_result(
+            agent_name="Agent 5 - Risk",
+            output=output,
+            endpoint=actual_endpoint,
+            success=True,
+            input_prompt=enhanced_prompt,
+            elapsed=elapsed,
+            tool_info=tool_info,
+            metadata=metadata,
+        )
         model_name = get_model_display_name(actual_endpoint)
         return format_parsed_output(output), format_output(output), format_metrics(elapsed, usage, tool_info), f"Success with {model_name} ({elapsed:.2f}s)"
     except Exception as e:
         error_msg = str(e)
         print(f"[ERROR] Agent 5 Risk failed: {error_msg}")
+        
+        # Store failed run
+        store_agent_result(
+            agent_name="Agent 5 - Risk",
+            output=None,
+            endpoint=endpoint,
+            success=False,
+            error_msg=error_msg,
+            input_prompt=prompt,
+        )
         
         # Check for JSON parsing errors (common with smaller Ollama models)
         if "json_invalid" in error_msg.lower() or "invalid json" in error_msg.lower() or "eof while parsing" in error_msg.lower():
@@ -2199,19 +2428,90 @@ Provide specific, constructive feedback.""",
         output_type=ComprehensiveJudgment,
     )
     
-    # Build context from previous results with detailed logging
-    print(f"[DEBUG] Building context for judge from {len(results_store)} agent results:")
-    for agent_name, result_data in results_store.items():
-        if isinstance(result_data, dict):
-            fields = list(result_data.keys())
-            print(f"  - {agent_name}: {len(fields)} fields: {fields}")
-        else:
-            print(f"  - {agent_name}: {type(result_data)}")
+    # Build comprehensive context from all agent runs (including failures)
+    print(f"[DEBUG] Building context for judge from {len(results_store)} agents:")
     
-    context = json.dumps(results_store, indent=2, default=str, ensure_ascii=False)
-    print(f"[DEBUG] Context size for judge: {len(context)} characters")
+    # Format context for judge agent with all runs
+    context_parts = []
+    total_runs = 0
     
-    full_prompt = f"{prompt}\n\nPrevious agent results:\n{context}"
+    for agent_name, runs_list in results_store.items():
+        if not runs_list:
+            continue
+        
+        total_runs += len(runs_list)
+        context_parts.append(f"\n=== {agent_name} ({len(runs_list)} run{'s' if len(runs_list) > 1 else ''}) ===\n")
+        
+        for i, run in enumerate(runs_list, 1):
+            run_status = "✅ SUCCESS" if run.get("success") else "❌ FAILED"
+            endpoint = run.get("endpoint", "unknown")
+            model = run.get("model", "unknown")
+            timestamp = run.get("timestamp", "unknown")
+            elapsed = run.get("elapsed")
+            input_prompt = run.get("input_prompt", "N/A")
+            
+            context_parts.append(f"\n--- Run #{i} ({run_status}) ---")
+            context_parts.append(f"Timestamp: {timestamp}")
+            context_parts.append(f"Endpoint: {endpoint}")
+            context_parts.append(f"Model: {model}")
+            if elapsed:
+                context_parts.append(f"Elapsed: {elapsed:.2f}s")
+            context_parts.append(f"Input Prompt: {input_prompt[:200]}{'...' if len(input_prompt) > 200 else ''}")
+            
+            if run.get("success"):
+                output = run.get("output")
+                if output:
+                    # Format output nicely
+                    if isinstance(output, dict):
+                        output_str = json.dumps(output, indent=2, default=str, ensure_ascii=False)
+                        # Truncate if too long
+                        if len(output_str) > 1000:
+                            output_str = output_str[:1000] + "\n... (truncated)"
+                        context_parts.append(f"Output:\n{output_str}")
+                    else:
+                        context_parts.append(f"Output: {str(output)[:500]}")
+                
+                # Add tool info
+                tool_calls = run.get("tool_calls", 0)
+                if tool_calls > 0:
+                    context_parts.append(f"Tool Calls: {tool_calls}")
+                    tool_details = run.get("tool_details", [])
+                    if tool_details:
+                        context_parts.append(f"Tools Used: {', '.join(str(td) for td in tool_details[:5])}")
+                
+                # Add metadata
+                metadata = run.get("metadata", {})
+                if metadata:
+                    endpoint_used = metadata.get("endpoint_used", endpoint)
+                    if endpoint_used != endpoint:
+                        context_parts.append(f"Note: Requested {endpoint} but used {endpoint_used}")
+                    if metadata.get("fallback_occurred"):
+                        context_parts.append(f"⚠️ Fallback occurred (requested: {metadata.get('requested_endpoint')})")
+            else:
+                error = run.get("error", "Unknown error")
+                context_parts.append(f"Error: {error[:500]}")
+            
+            context_parts.append("")  # Empty line between runs
+    
+    context = "\n".join(context_parts)
+    
+    print(f"[DEBUG] Context summary: {len(results_store)} agents, {total_runs} total runs")
+    print(f"[DEBUG] Context size: {len(context)} characters")
+    
+    full_prompt = f"""{prompt}
+
+=== COMPLETE AGENT EXECUTION HISTORY ===
+This includes ALL runs of all agents, including successes and failures, with different endpoints and models.
+
+{context}
+
+=== EVALUATION INSTRUCTIONS ===
+Please evaluate ALL runs shown above. Consider:
+1. Compare results across different endpoints/models for the same agent
+2. Identify which endpoints/models perform better for each task
+3. Note any failures and their causes
+4. Assess correctness, quality, and tool usage for each run
+5. Provide recommendations based on the complete execution history"""
     
     output, usage, elapsed, tool_info = execute_agent(judge_agent, full_prompt, ComprehensiveJudgment, "Agent 6")
     
@@ -2227,7 +2527,10 @@ Provide specific, constructive feedback.""",
         result_data["_metadata"]["elapsed"] = elapsed
         result_data["_metadata"]["tool_calls"] = tool_info.get("count", 0)
     
-    results_store["Agent 6"] = result_data
+    # Store judge result (but don't use helper to avoid circular reference)
+    if "Agent 6" not in results_store:
+        results_store["Agent 6"] = []
+    results_store["Agent 6"].append(result_data)
     model_name = get_model_display_name("llm_pro_finance")  # Judge always uses LLM Pro Finance
     return format_parsed_output(output), format_output(output), format_metrics(elapsed, usage, tool_info), f"Success with {model_name} ({elapsed:.2f}s)"
 
