@@ -27,6 +27,29 @@ from app.config import Settings, ENDPOINTS
 # HELPER FUNCTIONS
 # ============================================================================
 
+def get_model_display_name(endpoint: str) -> str:
+    """Get a human-readable model name for an endpoint.
+    
+    Args:
+        endpoint: Endpoint name ("koyeb", "hf", "llm_pro_finance", "ollama")
+        
+    Returns:
+        Human-readable model name
+    """
+    if endpoint == "koyeb":
+        return "Dragon LLM Open Finance 8B"
+    elif endpoint == "hf":
+        return "Dragon LLM Open Finance 8B (HF)"
+    elif endpoint == "llm_pro_finance":
+        return "Llama 70B"
+    elif endpoint == "ollama":
+        settings = Settings()
+        model_name = settings.ollama_model or "Ollama"
+        return f"{model_name}"
+    else:
+        return endpoint
+
+
 def get_endpoint_from_model(model) -> str:
     """Determine which endpoint a model is using by comparing base_url or model type.
     
@@ -1063,7 +1086,8 @@ Répondez avec un objet Portfolio structuré."""
         correction_notice = f"\n\n⚠️ **Calculation Correction:**\nThe model calculated a total value of {original_value:,.2f}€, but the correct value is {output.valeur_totale:,.2f}€ (calculated from extracted positions). The value has been automatically corrected.\n"
         parsed_output = parsed_output + correction_notice
     
-    return parsed_output, format_output(output), format_metrics(elapsed, usage, tool_info), f"Success ({elapsed:.2f}s)"
+    model_name = get_model_display_name(endpoint)
+    return parsed_output, format_output(output), format_metrics(elapsed, usage, tool_info), f"Success with {model_name} ({elapsed:.2f}s)"
 
 
 def run_agent_2(prompt: str, endpoint: str = "koyeb"):
@@ -1234,14 +1258,15 @@ Le JSON doit être exactement:
                 "compliance": compliance_verdict,
                 "elapsed": elapsed,
                 "endpoint_used": endpoint_used,
-                "model_used": "Llama 70B" if fallback_used else "Qwen 8B",
+                "model_used": get_model_display_name(endpoint_used),
                 "fallback": fallback_used
             }
         
         results_store["Agent 2"] = complete_result
         print(f"[DEBUG] Stored Agent 2 result. Keys: {list(complete_result.keys()) if isinstance(complete_result, dict) else 'not a dict'}")
         
-        model_used = "Llama 70B" if fallback_used else "Qwen 8B"
+        # Get model display name based on actual endpoint used
+        model_used = get_model_display_name(endpoint_used)
         return format_parsed_output(output), format_output(output), "".join(metrics_parts), f"Success with {model_used} ({elapsed:.2f}s)"
         
     except Exception as e:
@@ -1344,7 +1369,8 @@ Considérez les régimes fiscaux: PEA, assurance-vie, compte-titres, etc.""",
         
         results_store["Agent 3"] = output
         metrics_html = format_metrics(elapsed, Usage(), combined_tool_info) + compliance_html
-        return format_parsed_output(output), format_output(output), metrics_html, f"Success ({elapsed:.2f}s)"
+        model_name = get_model_display_name(endpoint)
+        return format_parsed_output(output), format_output(output), metrics_html, f"Success with {model_name} ({elapsed:.2f}s)"
     except Exception as e:
         return str(e), "", "", "Error"
     finally:
@@ -1462,7 +1488,8 @@ RÈGLES ABSOLUES:
         print(f"[DEBUG] Stored Agent 4 result with Greeks: {list(complete_result.keys()) if isinstance(complete_result, dict) else 'not a dict'}")
         
         metrics_html = format_metrics(elapsed, Usage(), tool_info) + tool_trace_html + compliance_html + compliance_verdict_html
-        return format_parsed_output(output), format_output(output), metrics_html, f"Success ({elapsed:.2f}s)"
+        model_name = get_model_display_name(endpoint)
+        return format_parsed_output(output), format_output(output), metrics_html, f"Success with {model_name} ({elapsed:.2f}s)"
     except Exception as e:
         return f"Error: {str(e)}", "", "", "Error"
     finally:
@@ -1736,7 +1763,8 @@ ACTION: Appelez l'outil et AFFICHEZ sa réponse JSON complète avant d'expliquer
         results_store["Agent 5 - Convert"] = complete_result
         print(f"[DEBUG] Stored Agent 5-Convert result. Type: {type(complete_result)}")
         
-        return format_parsed_output(output), format_output(output), format_metrics(elapsed, usage, tool_info), f"Success ({elapsed:.2f}s)"
+        model_name = get_model_display_name(actual_endpoint)
+        return format_parsed_output(output), format_output(output), format_metrics(elapsed, usage, tool_info), f"Success with {model_name} ({elapsed:.2f}s)"
     except Exception as e:
         error_msg = str(e)
         print(f"[ERROR] Agent 5 Convert failed: {error_msg}")
@@ -1849,7 +1877,8 @@ Répondez avec un objet ValidationResult structuré basé sur les résultats de 
         result_data["_metadata"] = metadata
     
     results_store["Agent 5 - Validate"] = result_data
-    return format_parsed_output(output), format_output(output), format_metrics(elapsed, usage, tool_info), f"Success ({elapsed:.2f}s)"
+    model_name = get_model_display_name(actual_endpoint)
+    return format_parsed_output(output), format_output(output), format_metrics(elapsed, usage, tool_info), f"Success with {model_name} ({elapsed:.2f}s)"
 
 
 def run_agent_5_risk(prompt: str, endpoint: str = "koyeb"):
@@ -1983,7 +2012,8 @@ Répondez avec un objet RiskScore structuré incluant:
             result_data["_metadata"] = metadata
         
         results_store["Agent 5 - Risk"] = result_data
-        return format_parsed_output(output), format_output(output), format_metrics(elapsed, usage, tool_info), f"Success ({elapsed:.2f}s)"
+        model_name = get_model_display_name(actual_endpoint)
+        return format_parsed_output(output), format_output(output), format_metrics(elapsed, usage, tool_info), f"Success with {model_name} ({elapsed:.2f}s)"
     except Exception as e:
         error_msg = str(e)
         print(f"[ERROR] Agent 5 Risk failed: {error_msg}")
@@ -2072,7 +2102,8 @@ Provide specific, constructive feedback.""",
         result_data["_metadata"]["tool_calls"] = tool_info.get("count", 0)
     
     results_store["Agent 6"] = result_data
-    return format_parsed_output(output), format_output(output), format_metrics(elapsed, usage, tool_info), f"Success ({elapsed:.2f}s)"
+    model_name = get_model_display_name("llm_pro_finance")  # Judge always uses LLM Pro Finance
+    return format_parsed_output(output), format_output(output), format_metrics(elapsed, usage, tool_info), f"Success with {model_name} ({elapsed:.2f}s)"
 
 
 # ============================================================================
