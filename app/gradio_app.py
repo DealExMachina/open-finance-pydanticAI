@@ -1834,90 +1834,74 @@ def create_agent_tab(agent_key: str, run_fn, is_judge: bool = False, exclude_end
     info = AGENT_INFO[agent_key]
     
     gr.Markdown(f"### {info['title']}")
-    gr.Markdown(f"*{info['description']}*")
+    gr.Markdown(f"*{info['description']}*", elem_classes=["compact"])
     
     with gr.Row():
         with gr.Column(scale=1):
             input_text = gr.Textbox(
                 label="Input",
                 value=info["default_input"],
-                lines=5,
-                placeholder="Enter your prompt..."
+                lines=4,
+                placeholder="Enter your prompt...",
+                container=False
             )
             
             # Endpoint selector (except for Judge)
             if is_judge:
-                gr.Markdown("**Model Endpoint:** LLM Pro 70B (fixed)")
+                gr.Markdown("**Model Endpoint:** LLM Pro 70B (fixed)", visible=False)
             else:
-                # Get available endpoints
+                # Get available endpoints for status indicators
                 exclude_list = exclude_endpoints or []
                 disabled_dict = disabled_endpoints or {}
                 available_endpoints = get_available_endpoints(include_llm_pro=True)
                 
-                # Build endpoint options with labels
-                # Include disabled endpoints but mark them clearly
-                endpoint_options = []
-                endpoint_values = []
-                disabled_info = []
+                # Build endpoint options - show ALL endpoints regardless of availability
+                # Mark unavailable/disabled ones in the label
+                endpoint_choices = []  # List of (label, value) tuples
                 
-                if available_endpoints.get("koyeb", False) and "koyeb" not in exclude_list:
-                    endpoint_options.append("Koyeb (Qwen 8B)")
-                    endpoint_values.append("koyeb")
-                if available_endpoints.get("hf", False) and "hf" not in exclude_list:
-                    endpoint_options.append("HuggingFace (Qwen 8B)")
-                    endpoint_values.append("hf")
+                # Always show Koyeb (default)
+                if "koyeb" not in exclude_list:
+                    status = "●" if available_endpoints.get("koyeb", False) else "○"
+                    endpoint_choices.append((f"{status} Koyeb", "koyeb"))
                 
-                # Handle LLM Pro - show as disabled if in disabled_endpoints, otherwise show normally
-                if available_endpoints.get("llm_pro_finance", False):
+                # Always show HuggingFace
+                if "hf" not in exclude_list:
+                    status = "●" if available_endpoints.get("hf", False) else "○"
+                    endpoint_choices.append((f"{status} HuggingFace", "hf"))
+                
+                # Always show Ollama if configured
+                if "ollama" not in exclude_list:
+                    ollama_settings = Settings()
+                    if ollama_settings.ollama_model:
+                        status = "●" if available_endpoints.get("ollama", False) else "○"
+                        endpoint_choices.append((f"{status} Ollama", "ollama"))
+                
+                # Handle LLM Pro - show if not excluded
+                if "llm_pro_finance" not in exclude_list:
                     if "llm_pro_finance" in disabled_dict:
                         # Show as disabled
-                        endpoint_options.append("LLM Pro (Llama 70B) ⚠️ Disabled")
-                        endpoint_values.append("llm_pro_finance")
-                        disabled_info.append(f"**LLM Pro (Llama 70B):** {disabled_dict['llm_pro_finance']}")
-                    elif "llm_pro_finance" not in exclude_list:
-                        # Show as enabled
-                        endpoint_options.append("LLM Pro (Llama 70B)")
-                        endpoint_values.append("llm_pro_finance")
+                        endpoint_choices.append(("⚠ LLM Pro (disabled)", "llm_pro_finance"))
+                    else:
+                        status = "●" if available_endpoints.get("llm_pro_finance", False) else "○"
+                        endpoint_choices.append((f"{status} LLM Pro", "llm_pro_finance"))
                 
-                if available_endpoints.get("ollama", False) and "ollama" not in exclude_list:
-                    ollama_settings = Settings()
-                    model_name = ollama_settings.ollama_model or "Local Model"
-                    endpoint_options.append(f"Ollama ({model_name})")
-                    endpoint_values.append("ollama")
+                # Default to Koyeb (always first in list)
+                default_value = "koyeb" if any(v == "koyeb" for _, v in endpoint_choices) else (endpoint_choices[0][1] if endpoint_choices else "koyeb")
                 
-                # Default to first available enabled endpoint (prefer koyeb > hf > llm_pro)
-                # Don't default to disabled endpoints
-                enabled_values = [v for v in endpoint_values if v not in disabled_dict]
-                default_endpoint = "koyeb" if "koyeb" in enabled_values else (enabled_values[0] if enabled_values else (endpoint_values[0] if endpoint_values else "koyeb"))
-                
-                if endpoint_options:
-                    # Create choices as tuples (label, value) for Radio component
-                    # Gradio Radio expects (label, value) format
-                    endpoint_choices = list(zip(endpoint_options, endpoint_values))
-                    endpoint_selector = gr.Radio(
-                        choices=endpoint_choices,
-                        label="Model Endpoint",
-                        value=default_endpoint,
-                        info="Select which endpoint to use for this agent"
-                    )
-                    
-                    # Show disabled endpoint info if any
-                    if disabled_info:
-                        gr.Markdown(
-                            "<div style='margin-top: 8px; padding: 8px; background: #fef3c7; border-radius: 4px; border-left: 3px solid #f59e0b;'>"
-                            + "<div style='font-size: 12px; color: #92400e;'>" +
-                            "<strong>⚠️ Disabled Endpoints:</strong><br/>" +
-                            "<br/>".join(disabled_info) +
-                            "</div></div>"
-                        )
-                else:
-                    # No endpoints available - show warning
-                    gr.Markdown("⚠️ **No endpoints available** - Please check server status")
-                    endpoint_selector = gr.State(value="koyeb")  # Default fallback
+                # Use compact Dropdown
+                endpoint_selector = gr.Dropdown(
+                    choices=endpoint_choices,
+                    value=default_value,
+                    label="",
+                    scale=1,
+                    container=False,
+                    show_label=False
+                )
             
-            run_btn = gr.Button("Run", variant="primary")
-            status = gr.Textbox(label="Status", interactive=False, value="Ready")
-            metrics = gr.HTML(label="Metrics", value="<div style='padding: 8px; color: #9ca3af; font-size: 13px;'>Run agent to see metrics</div>")
+            with gr.Row():
+                run_btn = gr.Button("Run", variant="primary", scale=1, size="sm")
+                status = gr.Textbox(label="", interactive=False, value="Ready", scale=4, container=False, show_label=False)
+            metrics = gr.HTML(value="<div style='padding: 4px; color: #9ca3af; font-size: 11px;'>Run agent to see metrics</div>", visible=True, container=False)
         
         with gr.Column(scale=2):
             # Human-readable parsed output on top
