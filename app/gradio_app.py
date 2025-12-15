@@ -1873,14 +1873,16 @@ def create_agent_tab(agent_key: str, run_fn, is_judge: bool = False, exclude_end
                     else:
                         endpoint_choices.append(("HuggingFace", "hf"))
                 
-                # Ollama (only if configured)
+                # Ollama (always shown; note if not configured)
                 if "ollama" not in exclude_list:
                     ollama_settings = Settings()
-                    if ollama_settings.ollama_model:
-                        if "ollama" in disabled_dict:
-                            disabled_notes.append(f"Ollama ({disabled_dict['ollama']})")
-                        else:
-                            endpoint_choices.append(("Ollama", "ollama"))
+                    if "ollama" in disabled_dict:
+                        disabled_notes.append(f"Ollama ({disabled_dict['ollama']})")
+                    elif not ollama_settings.ollama_model:
+                        # Show selectable option but warn that config is needed
+                        endpoint_choices.append(("Ollama (set OLLAMA_MODEL)", "ollama"))
+                    else:
+                        endpoint_choices.append(("Ollama", "ollama"))
                 
                 # LLM Pro
                 if "llm_pro_finance" not in exclude_list:
