@@ -1855,43 +1855,63 @@ def create_agent_tab(agent_key: str, run_fn, is_judge: bool = False, exclude_end
                 disabled_dict = disabled_endpoints or {}
                 available_endpoints = get_available_endpoints(include_llm_pro=True)
                 
-                # Build endpoint options - show ALL endpoints regardless of availability
-                # Simple labels without status indicators
+                # Build endpoint options - show allowed endpoints, omit disabled ones to avoid confusion
                 endpoint_choices = []  # List of (label, value) tuples
+                disabled_notes = []    # Collect disabled endpoints to display a note
                 
-                # Always show Koyeb first (default)
+                # Always prefer Koyeb as first/default
                 if "koyeb" not in exclude_list:
-                    endpoint_choices.append(("Koyeb", "koyeb"))
+                    if "koyeb" in disabled_dict:
+                        disabled_notes.append(f"Koyeb ({disabled_dict['koyeb']})")
+                    else:
+                        endpoint_choices.append(("Koyeb", "koyeb"))
                 
-                # Always show HuggingFace
+                # HuggingFace
                 if "hf" not in exclude_list:
-                    endpoint_choices.append(("HuggingFace", "hf"))
+                    if "hf" in disabled_dict:
+                        disabled_notes.append(f"HuggingFace ({disabled_dict['hf']})")
+                    else:
+                        endpoint_choices.append(("HuggingFace", "hf"))
                 
-                # Always show Ollama if configured
+                # Ollama (only if configured)
                 if "ollama" not in exclude_list:
                     ollama_settings = Settings()
                     if ollama_settings.ollama_model:
-                        endpoint_choices.append(("Ollama", "ollama"))
+                        if "ollama" in disabled_dict:
+                            disabled_notes.append(f"Ollama ({disabled_dict['ollama']})")
+                        else:
+                            endpoint_choices.append(("Ollama", "ollama"))
                 
-                # Handle LLM Pro - show if not excluded
+                # LLM Pro
                 if "llm_pro_finance" not in exclude_list:
                     if "llm_pro_finance" in disabled_dict:
-                        # Show as disabled
-                        endpoint_choices.append(("LLM Pro (disabled)", "llm_pro_finance"))
+                        disabled_notes.append(f"LLM Pro ({disabled_dict['llm_pro_finance']})")
                     else:
                         endpoint_choices.append(("LLM Pro", "llm_pro_finance"))
                 
-                # Default to Koyeb (always first in list)
-                default_value = "koyeb" if any(v == "koyeb" for _, v in endpoint_choices) else (endpoint_choices[0][1] if endpoint_choices else "koyeb")
+                # Default to Koyeb if present, otherwise first available
+                default_value = (
+                    "koyeb"
+                    if any(v == "koyeb" for _, v in endpoint_choices)
+                    else (endpoint_choices[0][1] if endpoint_choices else "koyeb")
+                )
                 
-                # Use compact Dropdown with label showing default
+                # Use compact Dropdown with explicit label
                 endpoint_selector = gr.Dropdown(
                     choices=endpoint_choices,
                     value=default_value,
-                    label="Endpoint",
+                    label="Endpoint (default: Koyeb)",
                     scale=1,
-                    container=False
+                    container=False,
+                    show_label=True,
                 )
+                
+                # Show a compact note for disabled endpoints (not selectable)
+                if disabled_notes:
+                    gr.Markdown(
+                        f"*Unavailable: {', '.join(disabled_notes)}*",
+                        elem_classes=["compact"],
+                    )
             
             with gr.Row():
                 run_btn = gr.Button("Run", variant="primary", scale=1, size="sm")
