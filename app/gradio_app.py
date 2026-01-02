@@ -21,6 +21,7 @@ if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
 from app.config import Settings, ENDPOINTS
+from app.langfuse_integration import LangfusePydanticAIHandler
 
 
 # ============================================================================
@@ -939,15 +940,47 @@ async def run_agent_async(agent, prompt: str, output_model=None, agent_name: str
         return {"error": msg}, None, 0, {}
     
     try:
+        # Determine endpoint if not provided
+        if endpoint is None:
+            # Try to determine from agent's model
+            try:
+                if hasattr(agent, 'model'):
+                    endpoint = get_endpoint_from_model(agent.model)
+            except Exception:
+                pass
+            if endpoint is None:
+                endpoint = "unknown"
+        
+        # Run with Langfuse tracing
+        handler = LangfusePydanticAIHandler(
+            agent_name=agent_name,
+            endpoint=endpoint,
+        )
+        
         # Run with timeout
         if output_model:
             result = await asyncio.wait_for(
-                agent.run(prompt, output_type=output_model),
+                handler.trace_agent_run(
+                    agent,
+                    prompt,
+                    output_type=output_model,
+                    metadata={
+                        "endpoint": endpoint,
+                        "timeout": timeout_seconds,
+                    },
+                ),
                 timeout=timeout_seconds
             )
         else:
             result = await asyncio.wait_for(
-                agent.run(prompt),
+                handler.trace_agent_run(
+                    agent,
+                    prompt,
+                    metadata={
+                        "endpoint": endpoint,
+                        "timeout": timeout_seconds,
+                    },
+                ),
                 timeout=timeout_seconds
             )
         

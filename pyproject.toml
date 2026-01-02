@@ -22,6 +22,7 @@ dependencies = [
     "scipy>=1.10.0",
     "logfire>=0.0.1",
     "gradio>=4.0.0",
+    "langfuse>=2.50.0",
 ]
 
 [project.optional-dependencies]
