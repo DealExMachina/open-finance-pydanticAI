@@ -55,28 +55,31 @@ class LangfusePydanticAIHandler:
             return await agent.run(prompt)
         
         start_time = time.time()
-        trace = None
         span = None
         
         try:
-            # Create trace
-            trace = self.langfuse.trace(
+            # Create root span (trace is created implicitly by the first observation)
+            # Using start_observation() for manual control in async context
+            span = self.langfuse.start_observation(
                 name=f"agent_{self.agent_name}",
+                as_type="span",
+                input={"prompt": prompt[:500]},  # Truncate long prompts
                 metadata={
                     "agent_name": self.agent_name,
                     "endpoint": self.endpoint,
                     "has_output_type": output_type is not None,
+                    "output_type": str(output_type) if output_type else None,
                     **(metadata or {}),
                 },
             )
             
-            # Create span for the agent run
-            span = trace.span(
-                name="agent_execution",
+            # Set trace-level attributes
+            span.update_trace(
                 metadata={
-                    "prompt": prompt[:500],  # Truncate long prompts
-                    "output_type": str(output_type) if output_type else None,
-                },
+                    "agent_name": self.agent_name,
+                    "endpoint": self.endpoint,
+                    **(metadata or {}),
+                }
             )
             
             # Run the agent
@@ -101,29 +104,15 @@ class LangfusePydanticAIHandler:
             # Extract tool calls
             tool_calls = ToolCallDetector.extract_tool_calls(result) if hasattr(result, 'all_messages') else []
             
-            # Update span with results
-            span.end(
-                output={
-                    "output": str(result.output)[:1000] if hasattr(result, 'output') else str(result)[:1000],
-                    "tool_calls_count": len(tool_calls),
-                    "tool_names": [tc.get('name', 'unknown') for tc in tool_calls],
-                },
-                metadata={
-                    "elapsed_time": elapsed_time,
-                    "input_tokens": getattr(usage, 'input_tokens', 0) if usage else 0,
-                    "output_tokens": getattr(usage, 'output_tokens', 0) if usage else 0,
-                    "total_tokens": getattr(usage, 'total_tokens', 0) if usage else 0,
-                },
-            )
-            
-            # Create spans for tool calls
+            # Create spans for tool calls (before updating main span)
             if tool_calls:
                 for i, tool_call in enumerate(tool_calls):
-                    tool_span = span.span(
+                    tool_span = span.start_observation(
                         name=f"tool_{tool_call.get('name', 'unknown')}",
+                        as_type="tool",
+                        input={"arguments": tool_call.get('args', {})},
                         metadata={
                             "tool_name": tool_call.get('name', 'unknown'),
-                            "arguments": tool_call.get('args', {}),
                         },
                     )
                     # Try to extract tool result if available
@@ -139,16 +128,18 @@ class LangfusePydanticAIHandler:
                     except Exception:
                         pass
                     
-                    tool_span.end(
+                    tool_span.update(
                         output=tool_result or "Tool executed",
                     )
+                    tool_span.end()
             
             # Create LLM generation span
             # PydanticAI doesn't expose internal LLM calls directly, so we create a summary span
             if hasattr(result, 'all_messages'):
                 messages = list(result.all_messages())
-                llm_span = span.span(
+                llm_span = span.start_observation(
                     name="llm_generation",
+                    as_type="generation",
                     metadata={
                         "message_count": len(messages),
                     },
@@ -161,7 +152,7 @@ class LangfusePydanticAIHandler:
                     content = str(getattr(msg, 'content', ''))[:200] if hasattr(msg, 'content') else ''
                     conversation_summary.append(f"{role}: {content[:200]}")
                 
-                llm_span.end(
+                llm_span.update(
                     output={
                         "conversation_summary": conversation_summary,
                         "total_messages": len(messages),
@@ -171,9 +162,25 @@ class LangfusePydanticAIHandler:
                         "output_tokens": getattr(usage, 'output_tokens', 0) if usage else 0,
                     },
                 )
+                llm_span.end()
             
-            # End trace
-            trace.update(
+            # Update span with results
+            span.update(
+                output={
+                    "output": str(result.output)[:1000] if hasattr(result, 'output') else str(result)[:1000],
+                    "tool_calls_count": len(tool_calls),
+                    "tool_names": [tc.get('name', 'unknown') for tc in tool_calls],
+                },
+                metadata={
+                    "elapsed_time": elapsed_time,
+                    "input_tokens": getattr(usage, 'input_tokens', 0) if usage else 0,
+                    "output_tokens": getattr(usage, 'output_tokens', 0) if usage else 0,
+                    "total_tokens": getattr(usage, 'total_tokens', 0) if usage else 0,
+                },
+            )
+            
+            # Update trace-level output
+            span.update_trace(
                 output={
                     "agent_output": str(result.output)[:1000] if hasattr(result, 'output') else str(result)[:1000],
                     "success": True,
@@ -185,6 +192,9 @@ class LangfusePydanticAIHandler:
                 },
             )
             
+            # End the root span
+            span.end()
+            
             return result
             
         except Exception as e:
@@ -192,16 +202,18 @@ class LangfusePydanticAIHandler:
             logger.warning(f"Error in Langfuse tracing: {e}", exc_info=True)
             
             if span:
-                span.end(
-                    output={"error": str(e)},
-                    level="ERROR",
-                )
-            
-            if trace:
-                trace.update(
-                    output={"success": False, "error": str(e)},
-                    level="ERROR",
-                )
+                try:
+                    span.update(
+                        output={"error": str(e)},
+                        metadata={"error": True},
+                    )
+                    span.update_trace(
+                        output={"success": False, "error": str(e)},
+                        metadata={"error": True},
+                    )
+                    span.end()
+                except Exception as inner_e:
+                    logger.warning(f"Error ending Langfuse span: {inner_e}")
             
             # Still run the agent even if tracing fails
             if output_type:

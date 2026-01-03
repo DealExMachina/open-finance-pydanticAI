@@ -39,7 +39,8 @@ def configure_langfuse() -> Optional[object]:
         # Get credentials from settings
         public_key = getattr(settings, 'langfuse_public_key', None)
         secret_key = getattr(settings, 'langfuse_secret_key', None)
-        host = getattr(settings, 'langfuse_host', 'https://cloud.langfuse.com')
+        # Support both langfuse_host and langfuse_base_url
+        host = getattr(settings, 'langfuse_host_resolved', None) or getattr(settings, 'langfuse_host', 'https://cloud.langfuse.com')
         
         # Only initialize if keys are present
         if not public_key or not secret_key:
