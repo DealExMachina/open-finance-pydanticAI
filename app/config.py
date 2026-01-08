@@ -13,7 +13,7 @@ ENDPOINTS = {
     },
     "hf": {
         "url": "https://jeanbaptdzd-open-finance-llm-8b.hf.space",
-        "model": "dragon-llm-open-finance",  # HF Space accepts any name
+        "model": "DragonLLM/Qwen-Open-Finance-R-8B",  # HF Space now uses vLLM with exact model name
     },
     "llm_pro_finance": {
         "url": "https://demo.llmprofinance.com",

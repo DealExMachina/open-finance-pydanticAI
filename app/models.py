@@ -15,7 +15,8 @@ except ImportError:
 from app.config import settings, ENDPOINTS, get_best_available_endpoint
 
 # Create PydanticAI model using OpenAI-compatible endpoint
-# Supports both Koyeb (vLLM) and HF Space (Transformers) backends
+# Supports both Koyeb (vLLM) and HF Space (vLLM) backends
+# Both use the same model: DragonLLM/Qwen-Open-Finance-R-8B
 # Automatically prefers Koyeb when available, falls back to HF
 def get_finance_model():
     """Get finance model using the best available endpoint (prefers Koyeb)."""
@@ -90,7 +91,7 @@ def get_model_for_endpoint(endpoint: str):
     elif endpoint == "hf":
         endpoint_config = ENDPOINTS.get("hf", {})
         return OpenAIChatModel(
-            model_name=endpoint_config.get("model", "dragon-llm-open-finance"),
+            model_name=endpoint_config.get("model", "DragonLLM/Qwen-Open-Finance-R-8B"),
             provider=OpenAIProvider(
                 base_url=f"{endpoint_config.get('url', '')}/v1",
                 api_key=settings.api_key,
