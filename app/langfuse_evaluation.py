@@ -1,4 +1,7 @@
-"""Langfuse evaluation helpers for scoring and comparing agent runs."""
+"""Langfuse evaluation helpers for scoring and comparing agent runs.
+
+Updated for Langfuse v3.x API compatibility (trace() -> start_span()).
+"""
 
 import logging
 from typing import Any, Dict, List, Optional
@@ -26,21 +29,18 @@ def score_trace(trace_id: str, scores: Dict[str, float]) -> bool:
         return False
     
     try:
-        # Get trace and add scores
-        trace = langfuse.trace(id=trace_id)
-        
-        # Add scores as observations or metadata
+        # Add scores using create_score() (Langfuse v3.x API)
         for score_name, score_value in scores.items():
             try:
-                trace.score(
+                langfuse.create_score(
+                    trace_id=trace_id,
                     name=score_name,
                     value=score_value,
                 )
             except Exception as e:
                 logger.debug(f"Failed to add score {score_name}: {e}")
-                # Fallback: add to metadata
-                trace.update(metadata={f"score_{score_name}": score_value})
         
+        langfuse.flush()
         logger.info(f"Added scores to trace {trace_id}: {scores}")
         return True
         
@@ -58,7 +58,7 @@ def create_evaluation_run(dataset_name: str, agent_name: str) -> Optional[str]:
         agent_name: Name of the agent being evaluated
         
     Returns:
-        Run ID if successful, None otherwise
+        Run ID (trace_id) if successful, None otherwise
     """
     langfuse = get_langfuse_client()
     if not langfuse:
@@ -66,8 +66,9 @@ def create_evaluation_run(dataset_name: str, agent_name: str) -> Optional[str]:
         return None
     
     try:
-        # Create a trace for the evaluation run
-        trace = langfuse.trace(
+        # Create a span for the evaluation run (Langfuse v3.x API)
+        # start_span() creates a trace implicitly
+        span = langfuse.start_span(
             name=f"evaluation_run_{agent_name}",
             metadata={
                 "dataset_name": dataset_name,
@@ -76,8 +77,11 @@ def create_evaluation_run(dataset_name: str, agent_name: str) -> Optional[str]:
             },
         )
         
-        logger.info(f"Created evaluation run for {agent_name} on {dataset_name}: {trace.id}")
-        return trace.id
+        # Get the trace_id from the span
+        trace_id = span.trace_id if hasattr(span, 'trace_id') else span.id
+        
+        logger.info(f"Created evaluation run for {agent_name} on {dataset_name}: {trace_id}")
+        return trace_id
         
     except Exception as e:
         logger.error(f"Error creating evaluation run: {e}", exc_info=True)
@@ -88,11 +92,14 @@ def compare_runs(run_ids: List[str]) -> Dict[str, Any]:
     """
     Compare different agent runs/versions.
     
+    Note: Langfuse v3.x doesn't provide direct trace fetching via SDK.
+    Use Langfuse UI or API for detailed trace comparison.
+    
     Args:
         run_ids: List of trace/run IDs to compare
         
     Returns:
-        Comparison results with metrics
+        Comparison results with metrics (limited in SDK, use Langfuse UI for full comparison)
     """
     langfuse = get_langfuse_client()
     if not langfuse:
@@ -103,40 +110,21 @@ def compare_runs(run_ids: List[str]) -> Dict[str, Any]:
         comparison = {
             "run_ids": run_ids,
             "metrics": {},
+            "note": "Use Langfuse UI for detailed trace comparison",
         }
         
-        # Fetch traces and extract metrics
+        # In Langfuse v3.x, trace fetching is primarily done via API/UI
+        # The SDK is optimized for writing traces, not reading
         traces = []
         for run_id in run_ids:
-            try:
-                trace = langfuse.trace(id=run_id)
-                traces.append({
-                    "id": run_id,
-                    "metadata": trace.metadata if hasattr(trace, 'metadata') else {},
-                    "scores": {},  # Would extract from trace scores
-                })
-            except Exception as e:
-                logger.debug(f"Failed to fetch trace {run_id}: {e}")
+            traces.append({
+                "id": run_id,
+                "url": f"https://cloud.langfuse.com/trace/{run_id}",
+            })
         
         comparison["traces"] = traces
         
-        # Calculate aggregate metrics
-        all_scores = {}
-        for trace in traces:
-            for score_name, score_value in trace.get("scores", {}).items():
-                if score_name not in all_scores:
-                    all_scores[score_name] = []
-                all_scores[score_name].append(score_value)
-        
-        for score_name, values in all_scores.items():
-            if values:
-                comparison["metrics"][score_name] = {
-                    "mean": sum(values) / len(values),
-                    "min": min(values),
-                    "max": max(values),
-                }
-        
-        logger.info(f"Compared {len(run_ids)} runs")
+        logger.info(f"Prepared comparison for {len(run_ids)} runs - view in Langfuse UI")
         return comparison
         
     except Exception as e:
@@ -148,11 +136,14 @@ def export_evaluation_results(run_id: str) -> Dict[str, Any]:
     """
     Export evaluation results for analysis.
     
+    Note: Langfuse v3.x SDK is optimized for writing traces.
+    For detailed export, use Langfuse API or UI export features.
+    
     Args:
-        run_id: Evaluation run ID
+        run_id: Evaluation run ID (trace_id)
         
     Returns:
-        Dictionary with evaluation results
+        Dictionary with evaluation results and Langfuse URL
     """
     langfuse = get_langfuse_client()
     if not langfuse:
@@ -160,19 +151,17 @@ def export_evaluation_results(run_id: str) -> Dict[str, Any]:
         return {}
     
     try:
-        trace = langfuse.trace(id=run_id)
-        
         results = {
             "run_id": run_id,
-            "metadata": trace.metadata if hasattr(trace, 'metadata') else {},
-            "scores": {},  # Would extract from trace
-            "spans": [],  # Would extract child spans
+            "url": f"https://cloud.langfuse.com/trace/{run_id}",
+            "note": "Use Langfuse UI or API for detailed trace export",
         }
         
-        logger.info(f"Exported evaluation results for {run_id}")
+        logger.info(f"Evaluation results available at: {results['url']}")
         return results
         
     except Exception as e:
         logger.error(f"Error exporting evaluation results: {e}", exc_info=True)
         return {}
+
 
