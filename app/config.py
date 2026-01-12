@@ -73,7 +73,7 @@ class Settings(BaseSettings):
     ollama_model: str = "qwen2.5:3b-instruct"  # Model name to use (e.g., "dragon-llm", "qwen2.5:7b", "ministral-3:14b-instruct-2512-q4_K_M")
     
     # Validators to strip quotes from env values
-    @field_validator('llm_pro_finance_key', 'llm_pro_finance_url', 'api_key', 'ollama_model', 'langfuse_public_key', 'langfuse_secret_key', 'langfuse_host', 'langfuse_base_url', mode='before')
+    @field_validator('llm_pro_finance_key', 'llm_pro_finance_url', 'api_key', 'ollama_model', 'langfuse_public_key', 'langfuse_secret_key', 'langfuse_host', 'langfuse_base_url', 'logfire_token', mode='before')
     @classmethod
     def strip_quotes_from_value(cls, v):
         if isinstance(v, str):
@@ -115,6 +115,12 @@ class Settings(BaseSettings):
     langfuse_host: str = "https://cloud.langfuse.com"
     # Support LANGFUSE_BASE_URL as alias for langfuse_host
     langfuse_base_url: str = ""
+    
+    # Logfire configuration (optional)
+    # Enable Logfire tracing for PydanticAI agents
+    enable_logfire: bool = True
+    # Token from LOGFIRE_TOKEN env var, or use `logfire auth` for local auth
+    logfire_token: str = ""
     
     # Generation settings for reasoning models
     max_tokens: int = 1500

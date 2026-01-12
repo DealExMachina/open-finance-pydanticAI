@@ -22,11 +22,111 @@ if str(project_root) not in sys.path:
 
 from app.config import Settings, ENDPOINTS
 from app.langfuse_integration import LangfusePydanticAIHandler
+from app.observability import (
+    configure_observability,
+    get_observability_handler,
+    get_status_summary,
+    set_runtime_override,
+    is_langfuse_active,
+    is_logfire_active,
+)
 
 
 # ============================================================================
 # HELPER FUNCTIONS
 # ============================================================================
+
+def get_observability_status_html() -> str:
+    """Generate compact HTML status for observability platforms (for accordion header area)."""
+    status = get_status_summary()
+    
+    langfuse = status["langfuse"]
+    logfire = status["logfire"]
+    
+    def status_indicator(active: bool, configured: bool) -> str:
+        if active:
+            return "🟢"
+        elif configured:
+            return "🟡"
+        else:
+            return "⚫"
+    
+    langfuse_indicator = status_indicator(langfuse["active"], langfuse["configured"])
+    logfire_indicator = status_indicator(logfire["active"], logfire["configured"])
+    
+    # Compact inline badges
+    html = f"""
+    <span style='font-size: 11px; color: #6b7280;'>
+        {langfuse_indicator} Langfuse &nbsp; {logfire_indicator} Logfire
+    </span>
+    """
+    return html
+
+
+def get_observability_details_html() -> str:
+    """Generate detailed HTML for observability panel."""
+    status = get_status_summary()
+    
+    langfuse = status["langfuse"]
+    logfire = status["logfire"]
+    
+    def status_badge(active: bool, configured: bool, name: str) -> str:
+        if active:
+            color = "#10b981"
+            bg = "#d1fae5"
+            label = "Active"
+        elif configured:
+            color = "#f59e0b"
+            bg = "#fef3c7"
+            label = "Paused"
+        else:
+            color = "#6b7280"
+            bg = "#f3f4f6"
+            label = "Not configured"
+        return f'<span style="background:{bg}; color:{color}; padding:2px 8px; border-radius:12px; font-size:11px; font-weight:500;">{label}</span>'
+    
+    langfuse_badge = status_badge(langfuse["active"], langfuse["configured"], "Langfuse")
+    logfire_badge = status_badge(logfire["active"], logfire["configured"], "Logfire")
+    
+    # Links to dashboards
+    langfuse_link = "https://cloud.langfuse.com" if langfuse["configured"] else "#"
+    logfire_link = "https://logfire-eu.pydantic.dev/deal-ex-machina/open-finance" if logfire["configured"] else "#"
+    
+    html = f"""
+    <div style='padding: 12px 0;'>
+        <div style='display: grid; grid-template-columns: 1fr 1fr; gap: 16px;'>
+            <div style='background: #fafafa; border-radius: 8px; padding: 12px;'>
+                <div style='display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;'>
+                    <span style='font-weight: 600; color: #1f2937;'>🔍 Langfuse</span>
+                    {langfuse_badge}
+                </div>
+                <div style='font-size: 12px; color: #6b7280;'>
+                    LLM observability & evaluation platform
+                </div>
+                {'<a href="' + langfuse_link + '" target="_blank" style="font-size:11px; color:#3b82f6;">Open Dashboard →</a>' if langfuse["configured"] else '<span style="font-size:11px; color:#9ca3af;">Set LANGFUSE_* env vars</span>'}
+            </div>
+            <div style='background: #fafafa; border-radius: 8px; padding: 12px;'>
+                <div style='display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;'>
+                    <span style='font-weight: 600; color: #1f2937;'>🔥 Logfire</span>
+                    {logfire_badge}
+                </div>
+                <div style='font-size: 12px; color: #6b7280;'>
+                    PydanticAI native tracing
+                </div>
+                {'<a href="' + logfire_link + '" target="_blank" style="font-size:11px; color:#3b82f6;">Open Dashboard →</a>' if logfire["configured"] else '<span style="font-size:11px; color:#9ca3af;">Run: logfire auth</span>'}
+            </div>
+        </div>
+    </div>
+    """
+    return html
+
+
+def update_observability_toggle(langfuse_enabled: bool, logfire_enabled: bool) -> tuple[str, str]:
+    """Update observability settings based on toggle state."""
+    set_runtime_override("langfuse", langfuse_enabled)
+    set_runtime_override("logfire", logfire_enabled)
+    return get_observability_status_html(), get_observability_details_html()
+
 
 def get_model_display_name(endpoint: str) -> str:
     """Get a human-readable model name for an endpoint.
@@ -951,8 +1051,10 @@ async def run_agent_async(agent, prompt: str, output_model=None, agent_name: str
             if endpoint is None:
                 endpoint = "unknown"
         
-        # Run with Langfuse tracing
-        handler = LangfusePydanticAIHandler(
+        # Run with unified observability (Langfuse + Logfire)
+        # Logfire auto-instruments PydanticAI via logfire.instrument_pydantic_ai()
+        # Langfuse uses explicit handler for detailed span management
+        handler = get_observability_handler(
             agent_name=agent_name,
             endpoint=endpoint,
         )
@@ -1107,6 +1209,70 @@ def format_metrics(elapsed: float, usage, tool_info: Dict) -> str:
         </div>
     </div>
     """
+
+
+# ============================================================================
+# OPERATION DESCRIPTION GENERATOR
+# ============================================================================
+
+def generate_operation_description(message: str, endpoint: str = "koyeb") -> str:
+    """Generate a human-readable description of a SWIFT/ISO 20022 message operation.
+    
+    Args:
+        message: The SWIFT MT or ISO 20022 XML message to describe
+        endpoint: Model endpoint to use for generation
+        
+    Returns:
+        A formatted markdown description of the operation
+    """
+    from app.models import get_model_for_endpoint
+    from pydantic_ai import Agent, ModelSettings
+    
+    try:
+        model = get_model_for_endpoint(endpoint)
+        
+        system_prompt = """Vous êtes un expert en messages financiers SWIFT et ISO 20022.
+Analysez le message fourni et générez une description claire et structurée de l'opération financière.
+
+Format de réponse OBLIGATOIRE (en français):
+## 📋 Description de l'Opération
+
+**Type de message:** [MT103/pacs.008/etc.]
+**Nature:** [Virement SEPA/Paiement international/etc.]
+
+### Parties impliquées
+- **Émetteur:** [Nom] ([Pays]) - IBAN: [IBAN]
+- **Bénéficiaire:** [Nom] ([Pays]) - IBAN: [IBAN]
+- **Banque émettrice:** [BIC] ([Nom si connu])
+
+### Détails de la transaction
+- **Montant:** [Montant] [Devise]
+- **Date d'exécution:** [Date]
+- **Référence:** [Référence]
+
+### Contexte réglementaire
+[Brève note sur le type de paiement: SEPA, SWIFT gpi, etc.]
+
+Soyez précis et concis. Extrayez toutes les informations disponibles dans le message."""
+
+        agent = Agent(
+            model,
+            model_settings=ModelSettings(max_output_tokens=800),
+            system_prompt=system_prompt,
+        )
+        
+        prompt = f"Décris cette opération financière:\n\n{message}"
+        
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            result = loop.run_until_complete(agent.run(prompt))
+            return result.output if hasattr(result, 'output') else str(result.data)
+        finally:
+            loop.close()
+            
+    except Exception as e:
+        return f"*Impossible de générer la description: {str(e)}*"
 
 
 # ============================================================================
@@ -1726,6 +1892,7 @@ def run_agent_5_convert(prompt: str, endpoint: str = "koyeb", direction: str = "
     # Check if endpoint is disabled for this agent
     if endpoint == "llm_pro_finance":
         return (
+            "*Endpoint non disponible*",
             "LLM Pro Finance endpoint doesn't support tool calls yet. This feature is coming soon. "
             "Please use Koyeb or HuggingFace endpoint for Agent 5 - Convert.",
             "", "", "Error"
@@ -1948,7 +2115,22 @@ Répondez en français avec les messages convertis."""
                 input_prompt=prompt,
                 elapsed=elapsed,
             )
-            return output["error"], "", "", "Error"
+            return "*Erreur lors de la conversion*", output["error"], "", "", "Error"
+        
+        # Generate operation description from the input message
+        # Extract the raw message from the prompt (remove conversion instructions)
+        raw_message = prompt
+        if "Convertis" in prompt or "convertis" in prompt:
+            # Try to extract the message part after the instruction
+            lines = prompt.split('\n')
+            msg_start = 0
+            for i, line in enumerate(lines):
+                if line.strip().startswith('{1:') or line.strip().startswith('<?xml') or line.strip().startswith('<Document'):
+                    msg_start = i
+                    break
+            raw_message = '\n'.join(lines[msg_start:])
+        
+        operation_description = generate_operation_description(raw_message, actual_endpoint)
         
         # Store complete result with metadata
         complete_result = output.model_dump() if hasattr(output, 'model_dump') else {"output": str(output), "raw": str(output)}
@@ -1977,7 +2159,7 @@ Répondez en français avec les messages convertis."""
         )
         
         model_name = get_model_display_name(actual_endpoint)
-        return format_parsed_output(output), format_output(output), format_metrics(elapsed, usage, tool_info), f"Success with {model_name} ({elapsed:.2f}s)"
+        return operation_description, format_parsed_output(output), format_output(output), format_metrics(elapsed, usage, tool_info), f"Success with {model_name} ({elapsed:.2f}s)"
     except Exception as e:
         error_msg = str(e)
         print(f"[ERROR] Agent 5 Convert failed: {error_msg}")
@@ -1990,7 +2172,7 @@ Répondez en français avec les messages convertis."""
             error_msg=error_msg,
             input_prompt=prompt,
         )
-        return f"Error: {error_msg}", "", "", "Error"
+        return "*Erreur*", f"Error: {error_msg}", "", "", "Error"
 
 
 def run_agent_5_validate(prompt: str, endpoint: str = "koyeb", direction: str = "swift"):
@@ -2004,6 +2186,7 @@ def run_agent_5_validate(prompt: str, endpoint: str = "koyeb", direction: str = 
     # Check if endpoint is disabled for this agent
     if endpoint == "llm_pro_finance":
         return (
+            "*Endpoint non disponible*",
             "LLM Pro Finance endpoint doesn't support tool calls yet. This feature is coming soon. "
             "Please use Koyeb or HuggingFace endpoint for Agent 5 - Validate.",
             "", "", "Error"
@@ -2115,7 +2298,20 @@ Répondez avec un objet ValidationResult structuré basé sur les résultats de 
             input_prompt=prompt,
             elapsed=elapsed,
         )
-        return output["error"], "", "", "Error"
+        return "*Erreur lors de la validation*", output["error"], "", "", "Error"
+    
+    # Generate operation description from the input message
+    raw_message = prompt
+    if "Valide" in prompt or "valide" in prompt:
+        lines = prompt.split('\n')
+        msg_start = 0
+        for i, line in enumerate(lines):
+            if line.strip().startswith('{1:') or line.strip().startswith('<?xml') or line.strip().startswith('<Document'):
+                msg_start = i
+                break
+        raw_message = '\n'.join(lines[msg_start:])
+    
+    operation_description = generate_operation_description(raw_message, actual_endpoint)
     
     result_data = output.model_dump() if hasattr(output, 'model_dump') else str(output)
     if isinstance(result_data, dict):
@@ -2141,7 +2337,7 @@ Répondez avec un objet ValidationResult structuré basé sur les résultats de 
         metadata=metadata,
     )
     model_name = get_model_display_name(actual_endpoint)
-    return format_parsed_output(output), format_output(output), format_metrics(elapsed, usage, tool_info), f"Success with {model_name} ({elapsed:.2f}s)"
+    return operation_description, format_parsed_output(output), format_output(output), format_metrics(elapsed, usage, tool_info), f"Success with {model_name} ({elapsed:.2f}s)"
 
 
 def run_agent_5_risk(prompt: str, endpoint: str = "koyeb", direction: str = "swift"):
@@ -2155,6 +2351,7 @@ def run_agent_5_risk(prompt: str, endpoint: str = "koyeb", direction: str = "swi
     # Check if endpoint is disabled for this agent
     if endpoint == "llm_pro_finance":
         return (
+            "*Endpoint non disponible*",
             "LLM Pro Finance endpoint doesn't support tool calls yet. This feature is coming soon. "
             "Please use Koyeb or HuggingFace endpoint for Agent 5 - Risk.",
             "", "", "Error"
@@ -2307,7 +2504,20 @@ Répondez avec un objet RiskScore structuré incluant:
                 input_prompt=enhanced_prompt,
                 elapsed=elapsed,
             )
-            return output["error"], "", "", "Error"
+            return "*Erreur lors de l'évaluation des risques*", output["error"], "", "", "Error"
+        
+        # Generate operation description from the input message
+        raw_message = prompt
+        if "Évalue" in prompt or "évalue" in prompt or "Analyse" in prompt:
+            lines = prompt.split('\n')
+            msg_start = 0
+            for i, line in enumerate(lines):
+                if line.strip().startswith('{1:') or line.strip().startswith('<?xml') or line.strip().startswith('<Document'):
+                    msg_start = i
+                    break
+            raw_message = '\n'.join(lines[msg_start:])
+        
+        operation_description = generate_operation_description(raw_message, actual_endpoint)
         
         result_data = output.model_dump() if hasattr(output, 'model_dump') else str(output)
         if isinstance(result_data, dict):
@@ -2333,7 +2543,7 @@ Répondez avec un objet RiskScore structuré incluant:
             metadata=metadata,
         )
         model_name = get_model_display_name(actual_endpoint)
-        return format_parsed_output(output), format_output(output), format_metrics(elapsed, usage, tool_info), f"Success with {model_name} ({elapsed:.2f}s)"
+        return operation_description, format_parsed_output(output), format_output(output), format_metrics(elapsed, usage, tool_info), f"Success with {model_name} ({elapsed:.2f}s)"
     except Exception as e:
         error_msg = str(e)
         print(f"[ERROR] Agent 5 Risk failed: {error_msg}")
@@ -2368,7 +2578,7 @@ The model ({model_name}) generated malformed JSON when calling risk assessment t
 ```
 {error_msg[:500]}
 ```"""
-            return friendly_msg, "", "", "Error"
+            return "*Erreur*", friendly_msg, "", "", "Error"
         
         # Check for BadRequestError from PydanticAI
         if "BadRequestError" in error_msg or "status_code: 400" in error_msg:
@@ -2402,10 +2612,10 @@ The model ({model_name}) returned an error during risk assessment.
 ```
 
 Please try again or use a different endpoint."""
-            return friendly_msg, "", "", "Error"
+            return "*Erreur*", friendly_msg, "", "", "Error"
         
         # Generic error handling
-        return f"Error: {error_msg[:500]}", "", "", "Error"
+        return "*Erreur*", f"Error: {error_msg[:500]}", "", "", "Error"
 
 
 def run_agent_6(prompt: str):
@@ -2856,14 +3066,19 @@ COMPAGNIE XYZ
             metrics = gr.HTML(value="<div style='padding: 4px; color: #9ca3af; font-size: 11px;'>Run agent to see metrics</div>", visible=True, container=False)
         
         with gr.Column(scale=2):
+            # Operation description - generated dynamically from the message
+            operation_desc = gr.Markdown(value="*Lancez l'agent pour voir la description de l'opération*")
+            
+            gr.Markdown("---")
+            gr.Markdown("#### 🔄 Résultat de la Conversion")
             parsed_output = gr.Markdown(label="Result", value="*Run agent to see results*")
             json_output = gr.Code(label="JSON Output (Full Data)", language="json", lines=10)
     
-    # Connect run button with direction parameter
+    # Connect run button with direction parameter - now returns 5 outputs
     run_btn.click(
         fn=run_agent_5_convert,
         inputs=[input_text, endpoint_selector, direction_selector],
-        outputs=[parsed_output, json_output, metrics, status]
+        outputs=[operation_desc, parsed_output, json_output, metrics, status]
     )
 
 
@@ -3017,14 +3232,19 @@ COMPAGNIE ABC
             metrics = gr.HTML(value="<div style='padding: 4px; color: #9ca3af; font-size: 11px;'>Run agent to see metrics</div>", visible=True, container=False)
         
         with gr.Column(scale=2):
+            # Operation description - generated dynamically from the message
+            operation_desc = gr.Markdown(value="*Lancez l'agent pour voir la description de l'opération*")
+            
+            gr.Markdown("---")
+            gr.Markdown("#### ✅ Résultat de la Validation")
             parsed_output = gr.Markdown(label="Result", value="*Run agent to see results*")
             json_output = gr.Code(label="JSON Output (Full Data)", language="json", lines=10)
     
-    # Connect run button with direction parameter
+    # Connect run button with direction parameter - now returns 5 outputs
     run_btn.click(
         fn=run_agent_5_validate,
         inputs=[input_text, endpoint_selector, direction_selector],
-        outputs=[parsed_output, json_output, metrics, status]
+        outputs=[operation_desc, parsed_output, json_output, metrics, status]
     )
 
 
@@ -3200,18 +3420,26 @@ RUSSIAN ENTITY LLC
             metrics = gr.HTML(value="<div style='padding: 4px; color: #9ca3af; font-size: 11px;'>Run agent to see metrics</div>", visible=True, container=False)
         
         with gr.Column(scale=2):
+            # Operation description - generated dynamically from the message
+            operation_desc = gr.Markdown(value="*Lancez l'agent pour voir la description de l'opération*")
+            
+            gr.Markdown("---")
+            gr.Markdown("#### ⚠️ Évaluation des Risques")
             parsed_output = gr.Markdown(label="Result", value="*Run agent to see results*")
             json_output = gr.Code(label="JSON Output (Full Data)", language="json", lines=10)
     
-    # Connect run button with direction parameter
+    # Connect run button with direction parameter - now returns 5 outputs
     run_btn.click(
         fn=run_agent_5_risk,
         inputs=[input_text, endpoint_selector, direction_selector],
-        outputs=[parsed_output, json_output, metrics, status]
+        outputs=[operation_desc, parsed_output, json_output, metrics, status]
     )
 
 
 def create_interface():
+    # Configure observability at startup
+    configure_observability()
+    
     with gr.Blocks(title="Open Finance AI") as app:
         
         # Header
@@ -3230,6 +3458,36 @@ def create_interface():
                     fn=wake_up_koyeb,
                     outputs=[status_html, wake_msg]
                 )
+        
+        # Observability Panel - Collapsible Accordion
+        with gr.Accordion(label="📊 Observability & Monitoring", open=False):
+            obs_compact_status = gr.HTML(value=get_observability_status_html())
+            obs_details = gr.HTML(value=get_observability_details_html())
+            
+            gr.Markdown("#### Toggle Tracing Platforms")
+            with gr.Row():
+                langfuse_toggle = gr.Checkbox(
+                    label="🔍 Langfuse (LLM Evaluation)",
+                    value=is_langfuse_active(),
+                    info="Trace runs to Langfuse for scoring and evaluation",
+                )
+                logfire_toggle = gr.Checkbox(
+                    label="🔥 Logfire (PydanticAI Tracing)",
+                    value=is_logfire_active(),
+                    info="Auto-instrument all PydanticAI agent calls",
+                )
+            
+            # Update observability when toggles change
+            langfuse_toggle.change(
+                fn=update_observability_toggle,
+                inputs=[langfuse_toggle, logfire_toggle],
+                outputs=[obs_compact_status, obs_details],
+            )
+            logfire_toggle.change(
+                fn=update_observability_toggle,
+                inputs=[langfuse_toggle, logfire_toggle],
+                outputs=[obs_compact_status, obs_details],
+            )
         
         # Tabs for each agent
         with gr.Tabs():
