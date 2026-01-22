@@ -63,20 +63,58 @@ Tested Responses API vs Chat Completions API in multi-turn financial scenarios t
 
 ## Why No Cache Hits?
 
-The 0% cache hit rate indicates:
+The 0% cache hit rate is due to **PydanticAI architecture limitation**:
 
-1. **PydanticAI doesn't manage stateful conversations**
-   - Each `agent.run()` is independent
-   - No `previous_response_id` passed between turns
-   - Context must be manually managed or stored
+### Root Cause: Missing `previous_response_id` Support
 
-2. **Ollama's Responses API implementation**
-   - May not implement full caching
-   - Caching requires explicit state management
+**GitHub Issue**: [#2663 - OpenAI Responses: `previous_response_id` support](https://github.com/pydantic/pydantic-ai/issues/2663)
+- Status: Open (filed August 25, 2025)
+- Problem: PydanticAI doesn't send `previous_response_id` parameter
+- Impact: Each `agent.run()` treated as new conversation
+- Result: 0% cache hit rate, no state reuse
 
-3. **Test design limitation**
-   - Created new agent instance per turn (fresh context)
-   - Should test with conversation-level state management
+### How Responses API Caching Works
+
+```python
+# Turn 1: Initial request
+response1 = client.responses.create(
+    model="model-name",
+    input="Analyze this portfolio..."
+)
+# Returns: response1.id = "resp_abc123"
+
+# Turn 2: Reference previous response
+response2 = client.responses.create(
+    model="model-name",
+    input="Adjust for conservative risk...",
+    previous_response_id="resp_abc123"  # <-- THIS IS MISSING IN PYDANTICAI
+)
+# Server loads cached context from response1
+# Cache hit = reduced input tokens
+```
+
+### PydanticAI Current Behavior
+
+```python
+# Turn 1
+result1 = await agent.run("Analyze portfolio...")
+# Context: Built internally
+
+# Turn 2
+result2 = await agent.run("Adjust for risk...")
+# Context: Turn 1 response NOT referenced
+# Previous response ID: NOT passed to API
+# Result: No cache hits
+```
+
+### Test Confirmation
+
+Even with:
+- Same agent instance (not recreated per turn)
+- Contextual questions referencing prior turns
+- Stateful conversation pattern
+
+We still get 0% cache hits because PydanticAI doesn't link turns via `previous_response_id`.
 
 ## Enhanced Token Details Confirmed
 
