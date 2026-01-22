@@ -1,6 +1,6 @@
 """PydanticAI model configuration."""
 
-from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.models.openai import OpenAIChatModel, OpenAIResponsesModel
 from pydantic_ai.providers.openai import OpenAIProvider
 
 try:
@@ -67,21 +67,24 @@ def get_judge_model():
 judge_model = get_judge_model()
 
 
-def get_model_for_endpoint(endpoint: str):
+def get_model_for_endpoint(endpoint: str, api_type: str = "chat"):
     """Create a model instance for a specific endpoint.
     
     Args:
         endpoint: One of "koyeb", "hf", "llm_pro_finance", or "ollama"
+        api_type: "chat" for Chat Completions API or "responses" for Responses API
         
     Returns:
-        OpenAIChatModel configured for the specified endpoint
+        OpenAIChatModel or OpenAIResponsesModel configured for the specified endpoint
         
     Raises:
         ValueError: If endpoint is not recognized or Ollama model is not configured
     """
+    # Select model class based on API type
+    model_class = OpenAIResponsesModel if api_type == "responses" else OpenAIChatModel
     if endpoint == "koyeb":
         endpoint_config = ENDPOINTS.get("koyeb", {})
-        return OpenAIChatModel(
+        return model_class(
             model_name=endpoint_config.get("model", "DragonLLM/Qwen-Open-Finance-R-8B"),
             provider=OpenAIProvider(
                 base_url=f"{endpoint_config.get('url', '')}/v1",
@@ -90,7 +93,7 @@ def get_model_for_endpoint(endpoint: str):
         )
     elif endpoint == "hf":
         endpoint_config = ENDPOINTS.get("hf", {})
-        return OpenAIChatModel(
+        return model_class(
             model_name=endpoint_config.get("model", "DragonLLM/Qwen-Open-Finance-R-8B"),
             provider=OpenAIProvider(
                 base_url=f"{endpoint_config.get('url', '')}/v1",
@@ -103,7 +106,7 @@ def get_model_for_endpoint(endpoint: str):
         api_path = endpoint_config.get("api_path", "/api")
         api_key = settings.llm_pro_finance_key if settings.llm_pro_finance_key else "not-needed"
         
-        return OpenAIChatModel(
+        return model_class(
             model_name=endpoint_config.get("model", "DragonLLM/llama3.1-70b-fin-v1.0-fp8"),
             provider=OpenAIProvider(
                 base_url=f"{base_url}{api_path}",
@@ -129,7 +132,7 @@ def get_model_for_endpoint(endpoint: str):
         else:
             # Fallback to OpenAI-compatible endpoint
             api_path = endpoint_config.get("api_path", "/v1")
-            return OpenAIChatModel(
+            return model_class(
                 model_name=settings.ollama_model,
                 provider=OpenAIProvider(
                     base_url=f"{base_url}{api_path}",
