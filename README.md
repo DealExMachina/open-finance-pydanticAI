@@ -1,6 +1,6 @@
 # Open Finance PydanticAI
 
-[![PydanticAI](https://img.shields.io/badge/PydanticAI-1.18+-blue?logo=python)](https://ai.pydantic.dev/)
+[![PydanticAI](https://img.shields.io/badge/PydanticAI-1.44+-blue?logo=python)](https://ai.pydantic.dev/)
 [![Logfire](https://img.shields.io/badge/Logfire-Observability-orange)](https://logfire.pydantic.dev/)
 [![Langfuse](https://img.shields.io/badge/Langfuse-Tracing-green)](https://langfuse.com/)
 [![Koyeb](https://img.shields.io/badge/Koyeb-Deploy-purple)](https://koyeb.com/)
